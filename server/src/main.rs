@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use orchard_server::{api, config::Config, store::AppState, workers};
+use orchard_server::{api, config::Config, read_api, store::AppState, workers};
 use std::{
     net::TcpListener,
     sync::{Arc, RwLock},
@@ -41,7 +41,8 @@ fn main() -> Result<()> {
     );
     let stop = CancellationToken::new();
     let server_status = Arc::new(RwLock::new(format!("Listening on {url}")));
-    let router = api::router(state.clone());
+    read_api::write_viewer_file(&files.directory, &state.viewer_token)?;
+    let router = api::router(state.clone()).merge(read_api::router(state.clone()));
     let status = server_status.clone();
     let shutdown = stop.clone();
     let tls_paths = config.tls_cert.clone().zip(config.tls_key.clone());

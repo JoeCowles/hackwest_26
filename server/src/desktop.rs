@@ -113,7 +113,11 @@ impl eframe::App for Console {
             });
             ui.separator();
             ui.label("Heartbeat: every 5 seconds. Closing this application stops the server.");
-            ui.small("Web and monitoring read endpoints are planned in Server Spec section 14.");
+            ui.horizontal(|ui|{
+                ui.hyperlink_to("Open web console",format!("{}/",self.url));
+                if ui.button("Copy viewer credential").clicked(){ctx.copy_text(self.state.viewer_token.clone());}
+            });
+            ui.small(format!("Read-only viewer expires {}. Restart the server to renew it.",orchard_server::store::timestamp(self.state.viewer_expires_at)));
             ui.hyperlink_to("Open the shared Server Spec","https://docs.google.com/document/d/1JnsZHlYPXQ1IRsMSEHeboICzqqviKJylI7gRsuUK13E/edit?tab=t.bclfm0yxwd6r");
         });
     }

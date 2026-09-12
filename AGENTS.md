@@ -12,9 +12,11 @@ examples, and implementation/verification status. Use native Google Docs
 formatting. A local Markdown file is not a substitute for the shared spec.
 Do not claim the documentation was updated unless the connector write succeeded.
 
-Section 14 contains planned web/monitoring contracts explicitly deferred by the
-user. Do not implement these routes or mark them available incidentally while
-working on ingestion. Section 15 describes the implemented core server API.
+Section 14 contains the broader web/monitoring design. The user subsequently
+authorized live frontend integration: section 16 records the implemented read
+subset, deployment, and explicit deviations/remaining work. Section 15 describes
+the core collector API. Do not claim still-planned monitoring or alert features
+are implemented. Web assets are embedded at compile time and served same-origin.
 
 Keep heartbeats at 5 seconds. Preserve observation states, stable object
 identities, boot/generation boundaries, and idempotent batch semantics.

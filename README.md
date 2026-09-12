@@ -105,3 +105,21 @@ normal Rust installation. Xcode command-line tools are needed on macOS.
 Deferred: section 14 read/monitoring routes, public OpenAPI discovery, frontend
 integration, alert evaluation/delivery, and collector implementations. The
 native window reads local server operational state; it is not the web dashboard.
+
+## Live frontend integration update
+
+This section supersedes the earlier statement that all web read endpoints are
+planned. The server now includes eight read routes and embeds the web console
+at `/`. See `web/README.md` for the viewer-credential connection flow and Server
+Spec section 16 for the exact supported API subset. Rebuild/restart to include
+these source changes; the previously packaged application is not updated by
+editing source files. This change has not been built, tested, or visually checked.
+
+Implemented read routes: `/api/v1/cluster`, `/api/v1/nodes`,
+`/api/v1/nodes/{node_id}`, `/api/v1/nodes/{node_id}/inventory`,
+`/api/v1/objects/{object_id}`, `/api/v1/filesystems`, `/api/v1/events`, and
+`/api/v1/capabilities`. The viewer credential is read-only and expires eight
+hours after startup. The native app can copy it and open the console.
+
+Historical inventory/metric queries, alert management, SSE, OpenAPI discovery,
+Prometheus, and health/readiness monitoring endpoints remain planned.

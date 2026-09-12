@@ -1,0 +1,32 @@
+/* Live console additions preserve the existing Orchard typography and palette. */
+:root { --orchard-blue: #5980a6; --orchard-ink: #1d1f20; --orchard-border: rgba(29,31,32,.18); --orchard-warning: #a65964; }
+.connection-status { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; border-left: 3px solid var(--orchard-blue); padding: 10px 14px; background: rgba(89,128,166,.06); font-size: 12px; }
+.connection-status.is-error { border-color: var(--orchard-warning); background: rgba(166,89,100,.06); }
+.connect-panel { max-width: 760px; background: linear-gradient(135deg, rgba(89,128,166,.09), transparent 70%); }
+.connect-panel h2 { font-family: 'Barlow Condensed', sans-serif; font-size: 38px; margin: 12px 0; font-weight: 600; }
+.connect-panel p { line-height: 1.65; }
+.connect-panel label { display: block; margin: 22px 0 8px; font-weight: 500; }
+.connect-fields { display: flex; gap: 12px; }
+.connect-fields input { flex: 1; min-width: 0; padding: 12px; border: 1px solid var(--orchard-border); background: rgba(255,255,255,.6); color: var(--orchard-ink); font: 13px ui-monospace, Menlo, monospace; border-radius: 0; }
+.connect-fields input:focus-visible, .host-link:focus-visible, .inventory-object summary:focus-visible { outline: 2px solid var(--orchard-blue); outline-offset: 3px; }
+.connection-error { color: var(--orchard-warning); }
+.live-split { display: grid; grid-template-columns: minmax(0,1.6fr) minmax(260px,1fr); gap: 20px; }
+.live-split .stage { width: 100%; min-width: 0; min-height: 420px; }
+.live-kpis { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 20px; }
+.live-kpi { font-family: 'Barlow Condensed', sans-serif; font-size: clamp(26px,3vw,40px); font-weight: 600; line-height: 1.15; margin: 8px 0; overflow-wrap: anywhere; }
+.live-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.live-table th { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .1em; color: rgba(29,31,32,.6); }
+.live-table th, .live-table td { padding: 12px 10px; border-bottom: 1px solid var(--orchard-border); vertical-align: top; }
+.live-table td { min-width: 90px; overflow-wrap: anywhere; }
+.live-table .bar { margin-top: 7px; min-width: 100px; }
+.host-link { border: 0; background: transparent; color: var(--orchard-blue); font: 600 19px 'Barlow Condensed', sans-serif; padding: 0; cursor: pointer; text-align: left; }
+.host-link:hover { text-decoration: underline; }
+.empty-note { padding: 16px 0; color: rgba(29,31,32,.6); line-height: 1.7; }
+.live-chart svg { display: block; width: 100%; height: 160px; background: repeating-linear-gradient(to top, transparent 0 39px, rgba(29,31,32,.06) 39px 40px); margin-bottom: 12px; }
+.host-summary { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.inventory-object { border-top: 1px solid var(--orchard-border); padding: 14px 0; }
+.inventory-object summary { cursor: pointer; overflow-wrap: anywhere; }
+.inventory-object summary span { margin-left: 12px; }
+.sidebar nav { display: flex; flex-direction: column; }
+@media(max-width:1000px) { .live-split { grid-template-columns: 1fr; } .topbar { flex-wrap: wrap; } }
+@media(max-width:600px) { .connect-fields { flex-direction: column; } .live-kpis { grid-template-columns: 1fr; } .live-split .stage { min-height: 330px; } .counts { flex-wrap: wrap; } .live-table { min-width: 600px; } .connect-panel h2 { font-size: 30px; } }

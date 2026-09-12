@@ -1,31 +1,38 @@
-# Orchard Cluster Console
+# Orchard live console
 
-Static implementation of the *Orchard Cluster Console* design (Industry design system: Barlow Condensed over Barlow, steel-blue accent, square hairline frames with "+" registration marks).
+The Rust server embeds and serves this frontend at its own root URL, normally
+`http://127.0.0.1:8787/`. Rebuild and restart the server after changing web assets.
+Running a separate static development server is not the supported live setup.
 
-No build step. Serve the folder and open `index.html`:
+1. Start the server with `bash scripts/cargo-local.sh run -p orchard-server`.
+2. In the native application, choose **Open web console** and **Copy viewer credential**.
+3. Paste the viewer credential into the console's connection form.
 
-```sh
-cd web && python3 -m http.server 8080
-# → http://localhost:8080
-```
+For headless operation, use `-- --headless`. The current viewer credential is in
+`viewer-token` in the server data directory, normally
+`~/Library/Application Support/Orchard Server`. It has owner-only permissions,
+expires eight hours after server startup, and rotates on restart. The browser
+keeps it in memory only; disconnect or reload clears it. Do not use admin or node
+credentials in the browser. Remote bindings require TLS as before.
 
-Modules are loaded as ES modules, so the page must be served over HTTP (not `file://`).
+The overview, filesystem, throughput, and host-detail views use authenticated
+read routes documented in Server Spec section 16. Polling runs every five
+seconds while visible and every thirty seconds while hidden. Pagination is
+followed, reads time out, and errors back off with Retry-After support. Failed
+refreshes retain the last snapshot for context but hide current numeric values.
 
-## Layout
+The rack displays up to 24 real enrolled nodes; the host table includes all nodes.
+Placement is illustrative. Unknown hardware uses a generic desktop model.
+Charts contain actual polls observed in this browser session, not historical
+backfill. Source timestamps and missing/stale observation states are retained.
+There is no fallback to fixture hosts or random metric jitter.
 
-| File | Role |
-| --- | --- |
-| `index.html` | Shell, fonts, mounts the app |
-| `css/console.css` | Tokens and component classes |
-| `js/app.js` | State, hash routing (`#fs`, `#node/pippin`, …), timers, modal |
-| `js/views.js` | The six views plus sidebar, top bar and page modal |
-| `js/model.js` | View models: per-host derived values, live jitter, KPI tiles |
-| `js/stage.js` | three.js rack elevation (drag to orbit, hover for vitals, click to open) |
-| `js/data.js` | Cluster fixture data |
-| `js/charts.js` | Deterministic series + SVG polyline helpers |
+Security displays reported collector events only. Alert evaluation, SMS, access
+management, historical metric queries, SSE, and Prometheus remain unavailable.
+The UI intentionally does not simulate these features. APFS/NFS rows are not
+additive; aggregate capacity comes from the server's deduplicated summaries.
 
-## Runtime dependencies (CDN)
+Existing pinned Preact/htm, Three.js, and Google Fonts dependencies still load
+from their public CDNs. Three.js is optional; host tables work without it.
 
-- Preact + htm: `unpkg.com/htm@3.1.1/preact/standalone.module.js`
-- three.js `0.149.0` from jsDelivr, loaded lazily with a 3 s budget. If it fails the overview shows a fallback panel and every other view is unaffected.
-- Google Fonts: Barlow, Barlow Condensed
+Validation status for this wiring change: not built, tested, or visually verified.

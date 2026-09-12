@@ -1,7 +1,7 @@
 // 3D rack stage: seven Macs on a lit shelf, rendered with three.js.
 // three.js is an optional enhancement — loaded async against a 3s budget, never
 // retried. The console's other views never wait on it.
-import { NODES, POS, statusColor } from './data.js';
+import { statusColor } from './data.js';
 
 const THREE_URL = 'https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js';
 
@@ -32,6 +32,9 @@ export function loadThree(budgetMs = 3000) {
 export function bootStage(host, opts = {}) {
   const T = window.THREE;
   if (!T || !host) return null;
+  const nodes = (opts.nodes || []).slice(0, 24);
+  const columns = Math.min(4, nodes.length || 1);
+  const rows = Math.max(1, Math.ceil(nodes.length / columns));
   const w = host.clientWidth || 900, h = host.clientHeight || 460;
 
   const renderer = new T.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'low-power' });
@@ -48,7 +51,7 @@ export function bootStage(host, opts = {}) {
     const asp = ww / hh;
     camera.aspect = asp;
     const half = Math.tan((30 * Math.PI / 180) / 2);
-    const dz = Math.max(7.0 / (half * asp), 3.2 / half);
+    const dz = Math.max((columns * 1.7 + 1) / (half * asp), (rows * 1.7 + 1) / half);
     camera.position.set(0, Math.max(3.4, dz * 0.33), dz);
     camera.lookAt(0, 1.0, 0);
     camera.updateProjectionMatrix();
@@ -101,9 +104,10 @@ export function bootStage(host, opts = {}) {
   const rig = new T.Group(); scene.add(rig);
   const hits = [];
 
-  NODES.forEach(n => {
+  nodes.forEach((n, index) => {
     const grp = new T.Group();
-    const [x, z] = POS[n.id];
+    const x = ((index % columns) - (columns - 1) / 2) * 3.5;
+    const z = (Math.floor(index / columns) - (rows - 1) / 2) * 3.5;
     grp.position.set(x, 0, z);
     const col = new T.Color(statusColor(n.state));
 
@@ -156,7 +160,7 @@ export function bootStage(host, opts = {}) {
   layer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
   host.appendChild(layer);
   const labels = {};
-  NODES.forEach(n => {
+  nodes.forEach(n => {
     const d = document.createElement('div');
     d.className = 'stage-label';
     d.style.borderColor = statusColor(n.state);

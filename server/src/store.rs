@@ -27,6 +27,8 @@ pub struct Statistics {
 pub struct AppState {
     pub db: SqlitePool,
     pub admin_hash: String,
+    pub viewer_token: String,
+    pub viewer_expires_at: i64,
     pub writer: Arc<Mutex<()>>,
     pub permits: Arc<Semaphore>,
     pub statistics: Arc<RwLock<Statistics>>,
@@ -74,6 +76,8 @@ impl AppState {
         Ok(Self {
             db,
             admin_hash: fingerprint(admin_token.as_bytes()),
+            viewer_token: secret("viewer"),
+            viewer_expires_at: Utc::now().timestamp_millis() + 8 * 60 * 60 * 1000,
             writer: Arc::new(Mutex::new(())),
             permits: Arc::new(Semaphore::new(64)),
             statistics: Arc::new(RwLock::new(Statistics::default())),
