@@ -1,0 +1,1111 @@
+{
+  "catalog_version": "1.0",
+  "status": "proposed design",
+  "integer_encoding": "decimal string",
+  "notes": [
+    "The catalogue defines a baseline, not a promise every field exists on every host.",
+    "source_field identifies either a verified literal field or a deliberately named versioned adapter; it is not universally a JSONPath.",
+    "Vendor attributes, full inventory, evidence and optional provider fields require separate versioned extensions.",
+    "Server semantic validation must enforce kind/unit/value_type/scope and bounded attributes in addition to JSON Schema.",
+    "Do not emit unavailable fields as zero; preserve capability separately from per-attempt errors.",
+    "Metric identities and source semantics are unchanged in heartbeat v2.0. Repeated collection IDs are not new samples. Agent transport health is represented by envelope metadata, not additional disk metrics."
+  ],
+  "metrics": [
+    {
+      "name": "storage.device.read_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Bytes (Read)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.read_operations_total",
+      "kind": "counter",
+      "unit": "operations",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Operations (Read)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.read_errors_total",
+      "kind": "counter",
+      "unit": "errors",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Errors (Read)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.read_retries_total",
+      "kind": "counter",
+      "unit": "retries",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Retries (Read)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.read_accounted_time_nanoseconds_total",
+      "kind": "counter",
+      "unit": "nanoseconds",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Total Time (Read)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.write_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Bytes (Write)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.write_operations_total",
+      "kind": "counter",
+      "unit": "operations",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Operations (Write)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.write_errors_total",
+      "kind": "counter",
+      "unit": "errors",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Errors (Write)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.write_retries_total",
+      "kind": "counter",
+      "unit": "retries",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Retries (Write)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.device.write_accounted_time_nanoseconds_total",
+      "kind": "counter",
+      "unit": "nanoseconds",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "virtual_device",
+        "controller"
+      ],
+      "collector": "iokit.block",
+      "source_field": "Statistics / Total Time (Write)",
+      "attributes": {},
+      "optional": false,
+      "notes": "Driver-instance cumulative counter. Time is driver-accounted, not device utilization or application latency."
+    },
+    {
+      "name": "storage.filesystem.total_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem",
+        "mount"
+      ],
+      "collector": "filesystem.capacity",
+      "source_field": "f_blocks * f_bsize",
+      "attributes": {},
+      "optional": false,
+      "notes": "Cached enumeration must be labelled cached; fresh remote query belongs in an isolated worker."
+    },
+    {
+      "name": "storage.filesystem.free_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem",
+        "mount"
+      ],
+      "collector": "filesystem.capacity",
+      "source_field": "f_bfree * f_bsize",
+      "attributes": {},
+      "optional": false,
+      "notes": "Cached enumeration must be labelled cached; fresh remote query belongs in an isolated worker."
+    },
+    {
+      "name": "storage.filesystem.available_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem",
+        "mount"
+      ],
+      "collector": "filesystem.capacity",
+      "source_field": "f_bavail * f_bsize",
+      "attributes": {},
+      "optional": false,
+      "notes": "Cached enumeration must be labelled cached; fresh remote query belongs in an isolated worker."
+    },
+    {
+      "name": "storage.filesystem.block_accounted_used_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem",
+        "mount"
+      ],
+      "collector": "filesystem.capacity",
+      "source_field": "(f_blocks - f_bfree) * f_bsize",
+      "attributes": {},
+      "optional": false,
+      "notes": "Derived accounting, not unique APFS allocation."
+    },
+    {
+      "name": "storage.filesystem.reported_files",
+      "kind": "gauge",
+      "unit": "files",
+      "value_type": "integer",
+      "scope": [
+        "filesystem",
+        "mount"
+      ],
+      "collector": "filesystem.capacity",
+      "source_field": "f_files",
+      "attributes": {},
+      "optional": true,
+      "notes": "Provider-specific meaning; no universal inode exhaustion alarm."
+    },
+    {
+      "name": "storage.filesystem.reported_free_files",
+      "kind": "gauge",
+      "unit": "files",
+      "value_type": "integer",
+      "scope": [
+        "filesystem",
+        "mount"
+      ],
+      "collector": "filesystem.capacity",
+      "source_field": "f_ffree",
+      "attributes": {},
+      "optional": true,
+      "notes": "Provider-specific meaning; no universal inode exhaustion alarm."
+    },
+    {
+      "name": "storage.mount.read_only",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "boolean",
+      "scope": [
+        "mount"
+      ],
+      "collector": "mount.inventory",
+      "source_field": "MNT_RDONLY",
+      "attributes": {},
+      "optional": false,
+      "notes": "Configuration state, not a live write test."
+    },
+    {
+      "name": "storage.apfs.container_capacity_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "apfs_container"
+      ],
+      "collector": "apfs.accounting",
+      "source_field": "diskutil APFS container capacity, target-version adapter",
+      "attributes": {},
+      "optional": true,
+      "notes": "Separate accounting domain. Absence of quota/reserve is not encoded as zero unless the source semantics establish zero."
+    },
+    {
+      "name": "storage.apfs.container_free_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "apfs_container"
+      ],
+      "collector": "apfs.accounting",
+      "source_field": "diskutil APFS container free space, target-version adapter",
+      "attributes": {},
+      "optional": true,
+      "notes": "Separate accounting domain. Absence of quota/reserve is not encoded as zero unless the source semantics establish zero."
+    },
+    {
+      "name": "storage.apfs.volume_used_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem"
+      ],
+      "collector": "apfs.accounting",
+      "source_field": "diskutil/getattrlist volume accounting, target-version adapter",
+      "attributes": {},
+      "optional": true,
+      "notes": "Separate accounting domain. Absence of quota/reserve is not encoded as zero unless the source semantics establish zero."
+    },
+    {
+      "name": "storage.apfs.volume_quota_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem"
+      ],
+      "collector": "apfs.accounting",
+      "source_field": "Supported volume quota attribute",
+      "attributes": {},
+      "optional": true,
+      "notes": "Separate accounting domain. Absence of quota/reserve is not encoded as zero unless the source semantics establish zero."
+    },
+    {
+      "name": "storage.apfs.volume_reserve_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem"
+      ],
+      "collector": "apfs.accounting",
+      "source_field": "Supported volume reserve attribute",
+      "attributes": {},
+      "optional": true,
+      "notes": "Separate accounting domain. Absence of quota/reserve is not encoded as zero unless the source semantics establish zero."
+    },
+    {
+      "name": "storage.apfs.purgeable_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem"
+      ],
+      "collector": "apfs.accounting",
+      "source_field": "apfs.util -G supported accounting field",
+      "attributes": {},
+      "optional": true,
+      "notes": "Separate accounting domain. Absence of quota/reserve is not encoded as zero unless the source semantics establish zero."
+    },
+    {
+      "name": "storage.apfs.snapshot_count",
+      "kind": "gauge",
+      "unit": "snapshots",
+      "value_type": "integer",
+      "scope": [
+        "filesystem"
+      ],
+      "collector": "apfs.snapshots",
+      "source_field": "Count of complete current snapshot inventory",
+      "attributes": {},
+      "optional": true,
+      "notes": "Snapshot count, not reclaimable space."
+    },
+    {
+      "name": "storage.filesystem.available_important_estimate_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem"
+      ],
+      "collector": "foundation.capacity",
+      "source_field": "volumeAvailableCapacityForImportantUsage",
+      "attributes": {},
+      "optional": true,
+      "notes": "Allocation-priority estimate; separate from free bytes."
+    },
+    {
+      "name": "storage.filesystem.available_opportunistic_estimate_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "filesystem"
+      ],
+      "collector": "foundation.capacity",
+      "source_field": "volumeAvailableCapacityForOpportunisticUsage",
+      "attributes": {},
+      "optional": true,
+      "notes": "Allocation-priority estimate; separate from free bytes."
+    },
+    {
+      "name": "storage.media.smart_passed",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "boolean",
+      "scope": [
+        "physical_device",
+        "controller"
+      ],
+      "collector": "smartctl",
+      "source_field": "smart_status.passed",
+      "attributes": {},
+      "optional": true,
+      "notes": "Reported device health state only; unsupported is not healthy."
+    },
+    {
+      "name": "storage.media.temperature_celsius",
+      "kind": "gauge",
+      "unit": "celsius",
+      "value_type": "number",
+      "scope": [
+        "physical_device",
+        "controller"
+      ],
+      "collector": "smartctl",
+      "source_field": "temperature.current",
+      "attributes": {},
+      "optional": true,
+      "notes": "smartctl JSON temperature is already Celsius."
+    },
+    {
+      "name": "storage.nvme.critical_warning_bits",
+      "kind": "gauge",
+      "unit": "1",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.critical_warning",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect returned nsid/controller scope; endurance may exceed 100."
+    },
+    {
+      "name": "storage.nvme.available_spare_percent",
+      "kind": "gauge",
+      "unit": "percent",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.available_spare",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect returned nsid/controller scope; endurance may exceed 100."
+    },
+    {
+      "name": "storage.nvme.available_spare_threshold_percent",
+      "kind": "gauge",
+      "unit": "percent",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.available_spare_threshold",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect returned nsid/controller scope; endurance may exceed 100."
+    },
+    {
+      "name": "storage.nvme.endurance_used_percent",
+      "kind": "gauge",
+      "unit": "percent",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.percentage_used",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect returned nsid/controller scope; endurance may exceed 100."
+    },
+    {
+      "name": "storage.nvme.data_units_read_total",
+      "kind": "counter",
+      "unit": "data_units",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.data_units_read",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.data_units_written_total",
+      "kind": "counter",
+      "unit": "data_units",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.data_units_written",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.host_read_commands_total",
+      "kind": "counter",
+      "unit": "commands",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.host_reads",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.host_write_commands_total",
+      "kind": "counter",
+      "unit": "commands",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.host_writes",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.controller_busy_minutes_total",
+      "kind": "counter",
+      "unit": "minutes",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.controller_busy_time",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.power_cycles_total",
+      "kind": "counter",
+      "unit": "cycles",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.power_cycles",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.power_on_hours_total",
+      "kind": "counter",
+      "unit": "hours",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.power_on_hours",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.unsafe_shutdowns_total",
+      "kind": "counter",
+      "unit": "shutdowns",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.unsafe_shutdowns",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.media_errors_total",
+      "kind": "counter",
+      "unit": "errors",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.media_errors",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nvme.error_log_entries_total",
+      "kind": "counter",
+      "unit": "entries",
+      "value_type": "integer",
+      "scope": [
+        "controller",
+        "physical_device",
+        "media"
+      ],
+      "collector": "smartctl",
+      "source_field": "nvme_smart_health_information_log.num_err_log_entries",
+      "attributes": {},
+      "optional": true,
+      "notes": "Respect nsid scope. One data unit is 512,000 bytes; byte conversion is quantized host traffic, not NAND traffic."
+    },
+    {
+      "name": "storage.nfs.client.operations_total",
+      "kind": "counter",
+      "unit": "operations",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.client",
+      "source_field": "Versioned nfsstat parser, operation table",
+      "attributes": {
+        "family": [
+          "v3_procedure",
+          "v4_rpc",
+          "v4_operation",
+          "v4_callback"
+        ],
+        "operation": "versioned allowlist"
+      },
+      "optional": false,
+      "notes": "Do not sum compounds, inner operations and callbacks as independent RPCs."
+    },
+    {
+      "name": "storage.nfs.client.rpc_timeouts_total",
+      "kind": "counter",
+      "unit": "events",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.client",
+      "source_field": "Versioned nfsstat parser: rpc_timeouts",
+      "attributes": {},
+      "optional": false,
+      "notes": "Host-wide client scope, not per mount."
+    },
+    {
+      "name": "storage.nfs.client.rpc_retries_total",
+      "kind": "counter",
+      "unit": "events",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.client",
+      "source_field": "Versioned nfsstat parser: rpc_retries",
+      "attributes": {},
+      "optional": false,
+      "notes": "Host-wide client scope, not per mount."
+    },
+    {
+      "name": "storage.nfs.client.rpc_invalid_replies_total",
+      "kind": "counter",
+      "unit": "events",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.client",
+      "source_field": "Versioned nfsstat parser: rpc_invalid_replies",
+      "attributes": {},
+      "optional": false,
+      "notes": "Host-wide client scope, not per mount."
+    },
+    {
+      "name": "storage.nfs.client.rpc_unexpected_replies_total",
+      "kind": "counter",
+      "unit": "events",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.client",
+      "source_field": "Versioned nfsstat parser: rpc_unexpected_replies",
+      "attributes": {},
+      "optional": false,
+      "notes": "Host-wide client scope, not per mount."
+    },
+    {
+      "name": "storage.nfs.client.cache_hits_total",
+      "kind": "counter",
+      "unit": "events",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.client",
+      "source_field": "Versioned cache counter table",
+      "attributes": {
+        "cache": "versioned allowlist"
+      },
+      "optional": false,
+      "notes": "Compute ratios within one cache family."
+    },
+    {
+      "name": "storage.nfs.client.cache_misses_total",
+      "kind": "counter",
+      "unit": "events",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.client",
+      "source_field": "Versioned cache counter table",
+      "attributes": {
+        "cache": "versioned allowlist"
+      },
+      "optional": false,
+      "notes": "Compute ratios within one cache family."
+    },
+    {
+      "name": "storage.nfs.client.protocol_errors_total",
+      "kind": "counter",
+      "unit": "errors",
+      "value_type": "integer",
+      "scope": [
+        "nfs_client"
+      ],
+      "collector": "nfsstat.errors",
+      "source_field": "nfsstat -E reported categories",
+      "attributes": {
+        "protocol": "versioned allowlist",
+        "error": "versioned allowlist"
+      },
+      "optional": true,
+      "notes": "Feature-probe; no zero substitution for missing mode."
+    },
+    {
+      "name": "storage.nfs.mount.not_responding",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "boolean",
+      "scope": [
+        "mount"
+      ],
+      "collector": "nfs.mount_status",
+      "source_field": "VQ_NOTRESP / source status",
+      "attributes": {},
+      "optional": true,
+      "notes": "Kernel status, not a new successful remote operation."
+    },
+    {
+      "name": "storage.nfs.mount.dead",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "boolean",
+      "scope": [
+        "mount"
+      ],
+      "collector": "nfs.mount_status",
+      "source_field": "VQ_DEAD / source status",
+      "attributes": {},
+      "optional": true,
+      "notes": "Kernel status, not a new successful remote operation."
+    },
+    {
+      "name": "storage.nfs.mount.recovering",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "boolean",
+      "scope": [
+        "mount"
+      ],
+      "collector": "nfs.mount_status",
+      "source_field": "nfsstat reported recovery status",
+      "attributes": {},
+      "optional": true,
+      "notes": "Kernel status, not a new successful remote operation."
+    },
+    {
+      "name": "storage.nfs.mount.outstanding_request_entries",
+      "kind": "gauge",
+      "unit": "requests",
+      "value_type": "integer",
+      "scope": [
+        "mount"
+      ],
+      "collector": "nfs.nstatus",
+      "source_field": "ns_threadcount",
+      "attributes": {},
+      "optional": true,
+      "notes": "Request entries, not unique threads. Feature-probe each client implementation."
+    },
+    {
+      "name": "storage.nfs.mount.oldest_request_age_seconds",
+      "kind": "gauge",
+      "unit": "seconds",
+      "value_type": "integer",
+      "scope": [
+        "mount"
+      ],
+      "collector": "nfs.nstatus",
+      "source_field": "ns_waittime",
+      "attributes": {},
+      "optional": true,
+      "notes": "Oldest outstanding request age, not mean/percentile latency; saturates at UINT32_MAX in published implementation."
+    },
+    {
+      "name": "storage.nfs.server.export.requests_total",
+      "kind": "counter",
+      "unit": "requests",
+      "value_type": "integer",
+      "scope": [
+        "nfs_export"
+      ],
+      "collector": "nfsstat.server_exports",
+      "source_field": "nfsstat -e versioned parser",
+      "attributes": {},
+      "optional": true,
+      "notes": "This Mac as server only; not the remote server backing a client mount."
+    },
+    {
+      "name": "storage.nfs.server.export.read_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_export"
+      ],
+      "collector": "nfsstat.server_exports",
+      "source_field": "nfsstat -e versioned parser",
+      "attributes": {},
+      "optional": true,
+      "notes": "This Mac as server only; not the remote server backing a client mount."
+    },
+    {
+      "name": "storage.nfs.server.export.write_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_export"
+      ],
+      "collector": "nfsstat.server_exports",
+      "source_field": "nfsstat -e versioned parser",
+      "attributes": {},
+      "optional": true,
+      "notes": "This Mac as server only; not the remote server backing a client mount."
+    },
+    {
+      "name": "storage.process.disk_read_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "process"
+      ],
+      "collector": "libproc.rusage",
+      "source_field": "Supported ri_diskio_bytesread",
+      "attributes": {},
+      "optional": true,
+      "notes": "Private/SPI; process scope with start identity, not per-volume accounting."
+    },
+    {
+      "name": "storage.process.disk_write_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "process"
+      ],
+      "collector": "libproc.rusage",
+      "source_field": "Supported ri_diskio_byteswritten",
+      "attributes": {},
+      "optional": true,
+      "notes": "Private/SPI; process scope with start identity, not per-volume accounting."
+    },
+    {
+      "name": "storage.network.interface.read_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "network_interface"
+      ],
+      "collector": "network.context",
+      "source_field": "Versioned interface counter parser",
+      "attributes": {},
+      "optional": true,
+      "notes": "Context includes non-NFS traffic; direction is host interface perspective."
+    },
+    {
+      "name": "storage.network.interface.write_bytes_total",
+      "kind": "counter",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "network_interface"
+      ],
+      "collector": "network.context",
+      "source_field": "Versioned interface counter parser",
+      "attributes": {},
+      "optional": true,
+      "notes": "Context includes non-NFS traffic; direction is host interface perspective."
+    },
+    {
+      "name": "storage.network.interface.errors_total",
+      "kind": "counter",
+      "unit": "errors",
+      "value_type": "integer",
+      "scope": [
+        "network_interface"
+      ],
+      "collector": "network.context",
+      "source_field": "Versioned interface counter parser",
+      "attributes": {},
+      "optional": true,
+      "notes": "Context includes non-NFS traffic; direction is host interface perspective."
+    },
+    {
+      "name": "storage.probe.success",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "boolean",
+      "scope": [
+        "mount",
+        "nfs_endpoint",
+        "filesystem"
+      ],
+      "collector": "probe",
+      "source_field": "Probe result",
+      "attributes": {
+        "operation": "configured allowlist",
+        "stack": [
+          "native",
+          "libnfs",
+          "rpc"
+        ]
+      },
+      "optional": true,
+      "notes": "Record operation, identity policy, and probe stack; not general media health."
+    },
+    {
+      "name": "storage.probe.duration_seconds",
+      "kind": "gauge",
+      "unit": "seconds",
+      "value_type": "number",
+      "scope": [
+        "mount",
+        "nfs_endpoint",
+        "filesystem"
+      ],
+      "collector": "probe",
+      "source_field": "Probe result",
+      "attributes": {
+        "operation": "configured allowlist",
+        "stack": [
+          "native",
+          "libnfs",
+          "rpc"
+        ]
+      },
+      "optional": true,
+      "notes": "Record operation, identity policy, and probe stack; not general media health."
+    },
+    {
+      "name": "storage.collector.duration_seconds",
+      "kind": "gauge",
+      "unit": "seconds",
+      "value_type": "number",
+      "scope": [
+        "host"
+      ],
+      "collector": "agent.self",
+      "source_field": "Agent-internal accounting",
+      "attributes": {
+        "collector": "installed collector allowlist"
+      },
+      "optional": false,
+      "notes": "Proposed collector metric, not a macOS disk field."
+    },
+    {
+      "name": "storage.collector.failures_total",
+      "kind": "counter",
+      "unit": "attempts",
+      "value_type": "integer",
+      "scope": [
+        "host"
+      ],
+      "collector": "agent.self",
+      "source_field": "Agent-internal accounting",
+      "attributes": {
+        "collector": "installed collector allowlist"
+      },
+      "optional": false,
+      "notes": "Proposed collector metric, not a macOS disk field."
+    },
+    {
+      "name": "storage.collector.skipped_total",
+      "kind": "counter",
+      "unit": "attempts",
+      "value_type": "integer",
+      "scope": [
+        "host"
+      ],
+      "collector": "agent.self",
+      "source_field": "Agent-internal accounting",
+      "attributes": {
+        "collector": "installed collector allowlist"
+      },
+      "optional": false,
+      "notes": "Proposed collector metric, not a macOS disk field."
+    },
+    {
+      "name": "storage.collector.pending_workers",
+      "kind": "gauge",
+      "unit": "workers",
+      "value_type": "integer",
+      "scope": [
+        "host"
+      ],
+      "collector": "agent.self",
+      "source_field": "Agent-internal accounting",
+      "attributes": {
+        "collector": "installed collector allowlist"
+      },
+      "optional": false,
+      "notes": "Proposed collector metric, not a macOS disk field."
+    },
+    {
+      "name": "storage.collector.spool_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "host"
+      ],
+      "collector": "agent.self",
+      "source_field": "Agent-internal accounting",
+      "attributes": {
+        "collector": "installed collector allowlist"
+      },
+      "optional": false,
+      "notes": "Proposed collector metric, not a macOS disk field."
+    },
+    {
+      "name": "storage.collector.dropped_batches_total",
+      "kind": "counter",
+      "unit": "batches",
+      "value_type": "integer",
+      "scope": [
+        "host"
+      ],
+      "collector": "agent.self",
+      "source_field": "Agent-internal accounting",
+      "attributes": {
+        "collector": "installed collector allowlist"
+      },
+      "optional": false,
+      "notes": "Proposed collector metric, not a macOS disk field."
+    }
+  ],
+  "heartbeat_schema_version": "2.0"
+}

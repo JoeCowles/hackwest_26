@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.example.ciderd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/libexec/ciderd</string>
+		<string>run</string>
+		<string>--config</string>
+		<string>/Library/Application Support/Ciderd/config.toml</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>UserName</key>
+	<string>root</string>
+	<key>GroupName</key>
+	<string>wheel</string>
+	<key>WorkingDirectory</key>
+	<string>/</string>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>StandardOutPath</key>
+	<string>/var/log/ciderd.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/ciderd.stderr.log</string>
+</dict>
+</plist>

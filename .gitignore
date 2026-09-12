@@ -1,0 +1,10 @@
+.direnv/
+target/
+/result
+/result-*
+.DS_Store
+
+# Local configuration; keep example files available to commit.
+.env
+.env.*
+!.env.example

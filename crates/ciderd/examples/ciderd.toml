@@ -1,0 +1,47 @@
+# Example configuration; illustrative endpoint and installation paths.
+# Root owns this file and all executable/credential paths.
+[node]
+identity_file = "/Library/Application Support/Ciderd/node.json"
+state_directory = "/Library/Application Support/Ciderd/state"
+
+[heartbeat]
+endpoint = "https://head.example.invalid/heartbeat"
+bearer_token_file = "/Library/Application Support/Ciderd/credentials/token"
+# Optional private deployment CA, in addition to system trust:
+# ca_certificate_file = "/Library/Application Support/Ciderd/credentials/ca.pem"
+interval_seconds = 15
+connect_timeout_seconds = 3
+request_timeout_seconds = 8
+maximum_backoff_seconds = 60
+maximum_request_bytes = 1048576
+maximum_response_bytes = 16384
+delivery_mode = "latest"
+follow_redirects = false
+
+[collection]
+io_seconds = 5
+mount_inventory_seconds = 15
+nfs_counters_seconds = 15
+nfs_status_seconds = 15
+capacity_seconds = 60
+smart_seconds = 300
+inventory_reconcile_seconds = 300
+apfs_accounting_seconds = 1800
+jitter_percent = 10
+nfs_path_refresh_enabled = false
+active_write_probes_enabled = false
+diagnostic_jobs_enabled = false
+
+[limits]
+command_workers = 4
+native_workers = 2
+remote_workers = 4
+workers_per_resource = 1
+stdout_bytes = 2097152
+stderr_bytes = 65536
+pending_events = 256
+recent_sample_history = 0
+
+[tools]
+# Optional: pin a verified installation path before enabling SMART.
+# smartctl = "/opt/homebrew/sbin/smartctl"

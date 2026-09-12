@@ -1,0 +1,387 @@
+{
+  "schema_version": "2.0",
+  "node_id": "node-example-01",
+  "boot_id": "boot-example-01",
+  "agent_session_id": "session-example-01",
+  "sequence": "482",
+  "created_at": "2026-09-12T19:00:15Z",
+  "resources": [],
+  "relationships": [],
+  "collections": [
+    {
+      "collection_id": "session-example-01:482:filesystem.capacity:mount-nfs-a",
+      "resource_id": "node-example-01/mount-nfs-a",
+      "collector": "filesystem.capacity",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "timeout",
+      "metrics": [
+        {
+          "name": "storage.filesystem.available_bytes",
+          "kind": "gauge",
+          "unit": "bytes",
+          "availability": "timeout",
+          "attributes": {},
+          "reason": "No fresh capacity result before controller deadline."
+        }
+      ],
+      "worker_state": "timed_out_pending_exit",
+      "error": {
+        "domain": "collector",
+        "code": "deadline",
+        "message": "Synthetic fixture: worker slot remains reserved until confirmed exit."
+      }
+    },
+    {
+      "collection_id": "session-example-01:482:smartctl:device-a",
+      "resource_id": "node-example-01/device-a",
+      "collector": "smartctl",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "unsupported",
+      "metrics": [
+        {
+          "name": "storage.media.smart_passed",
+          "kind": "state",
+          "unit": "1",
+          "availability": "unsupported",
+          "attributes": {},
+          "reason": "Synthetic fixture: this device interface does not expose SMART."
+        }
+      ],
+      "worker_state": "exited"
+    },
+    {
+      "collection_id": "session-example-01:481:iokit.block:device-a",
+      "resource_id": "node-example-01/device-a",
+      "collector": "iokit.block",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "ok",
+      "metrics": [
+        {
+          "name": "storage.device.read_bytes_total",
+          "kind": "counter",
+          "unit": "bytes",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "12345678901234567890",
+          "freshness": "live",
+          "counter_epoch": "boot-example-01/registry-example-42/1"
+        },
+        {
+          "name": "storage.device.read_operations_total",
+          "kind": "counter",
+          "unit": "operations",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "400000",
+          "freshness": "live",
+          "counter_epoch": "boot-example-01/registry-example-42/1"
+        },
+        {
+          "name": "storage.device.read_errors_total",
+          "kind": "counter",
+          "unit": "errors",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "0",
+          "freshness": "live",
+          "counter_epoch": "boot-example-01/registry-example-42/1"
+        }
+      ]
+    },
+    {
+      "collection_id": "session-example-01:481:smartctl:controller-a",
+      "resource_id": "node-example-01/controller-a",
+      "collector": "smartctl",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "ok",
+      "metrics": [
+        {
+          "name": "storage.media.smart_passed",
+          "kind": "state",
+          "unit": "1",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "boolean",
+          "value": false,
+          "freshness": "live"
+        },
+        {
+          "name": "storage.media.temperature_celsius",
+          "kind": "gauge",
+          "unit": "celsius",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "number",
+          "value": 48.0,
+          "freshness": "live"
+        },
+        {
+          "name": "storage.nvme.critical_warning_bits",
+          "kind": "gauge",
+          "unit": "1",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "4",
+          "freshness": "live"
+        },
+        {
+          "name": "storage.nvme.endurance_used_percent",
+          "kind": "gauge",
+          "unit": "percent",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "107",
+          "freshness": "live"
+        },
+        {
+          "name": "storage.nvme.media_errors_total",
+          "kind": "counter",
+          "unit": "errors",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "3",
+          "freshness": "live",
+          "counter_epoch": "controller-a/lifetime-1"
+        }
+      ],
+      "exit_code": 8,
+      "extensions": {
+        "decoded_exit_bits": [
+          "device_reports_failing_health"
+        ],
+        "fixture": true
+      }
+    },
+    {
+      "collection_id": "session-example-01:481:mount.inventory:mount-nfs-a",
+      "resource_id": "node-example-01/mount-nfs-a",
+      "collector": "mount.inventory",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "ok",
+      "metrics": [
+        {
+          "name": "storage.filesystem.available_bytes",
+          "kind": "gauge",
+          "unit": "bytes",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "800000000000",
+          "freshness": "cached",
+          "reason": "Kernel cache refresh time is unknown."
+        }
+      ]
+    },
+    {
+      "collection_id": "session-example-01:481:nfs.nstatus:mount-nfs-a",
+      "resource_id": "node-example-01/mount-nfs-a",
+      "collector": "nfs.nstatus",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "ok",
+      "metrics": [
+        {
+          "name": "storage.nfs.mount.not_responding",
+          "kind": "state",
+          "unit": "1",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "boolean",
+          "value": true,
+          "freshness": "live"
+        },
+        {
+          "name": "storage.nfs.mount.dead",
+          "kind": "state",
+          "unit": "1",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "boolean",
+          "value": false,
+          "freshness": "live"
+        },
+        {
+          "name": "storage.nfs.mount.outstanding_request_entries",
+          "kind": "gauge",
+          "unit": "requests",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "7",
+          "freshness": "live"
+        },
+        {
+          "name": "storage.nfs.mount.oldest_request_age_seconds",
+          "kind": "gauge",
+          "unit": "seconds",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "23",
+          "freshness": "live"
+        }
+      ]
+    },
+    {
+      "collection_id": "session-example-01:481:nfsstat.client:nfs-client",
+      "resource_id": "node-example-01/nfs-client",
+      "collector": "nfsstat.client",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "ok",
+      "metrics": [
+        {
+          "name": "storage.nfs.client.operations_total",
+          "kind": "counter",
+          "unit": "operations",
+          "availability": "available",
+          "attributes": {
+            "family": "v3_procedure",
+            "operation": "READ"
+          },
+          "value_type": "integer",
+          "value": "25000",
+          "freshness": "live",
+          "counter_epoch": "boot-example-01/nfs-client/1"
+        },
+        {
+          "name": "storage.nfs.client.rpc_timeouts_total",
+          "kind": "counter",
+          "unit": "events",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "5",
+          "freshness": "live",
+          "counter_epoch": "boot-example-01/nfs-client/1"
+        }
+      ]
+    }
+  ],
+  "events": [],
+  "tombstones": [],
+  "message_type": "heartbeat",
+  "agent_generation": "7",
+  "clock_id": "session-example-01/monotonic",
+  "monotonic_ns": "3615050000000",
+  "agent": {
+    "version": "0.1.0-design",
+    "target": "aarch64-apple-darwin",
+    "os_version": "fixture-only",
+    "os_build": "fixture-only",
+    "delivery_mode": "latest",
+    "heartbeat_interval_seconds": 15,
+    "quarantined_workers": 1,
+    "discarded_samples_total": "0",
+    "dropped_events_total": "0",
+    "payload_limited": false
+  },
+  "inventory": {
+    "revision": "12",
+    "included": false
+  },
+  "collector_states": [
+    {
+      "collector": "filesystem.capacity",
+      "resource_id": "node-example-01/mount-nfs-a",
+      "phase": "timed_out_pending_exit",
+      "poll_interval_seconds": 15,
+      "stale_after_seconds": 45,
+      "last_attempt_id": "session-example-01:482:filesystem.capacity:mount-nfs-a"
+    },
+    {
+      "collector": "smartctl",
+      "resource_id": "node-example-01/device-a",
+      "phase": "idle",
+      "poll_interval_seconds": 300,
+      "stale_after_seconds": 900,
+      "last_attempt_id": "session-example-01:482:smartctl:device-a"
+    },
+    {
+      "collector": "iokit.block",
+      "resource_id": "node-example-01/device-a",
+      "phase": "idle",
+      "poll_interval_seconds": 15,
+      "stale_after_seconds": 45,
+      "last_attempt_id": "session-example-01:481:iokit.block:device-a"
+    },
+    {
+      "collector": "smartctl",
+      "resource_id": "node-example-01/controller-a",
+      "phase": "idle",
+      "poll_interval_seconds": 300,
+      "stale_after_seconds": 900,
+      "last_attempt_id": "session-example-01:481:smartctl:controller-a"
+    },
+    {
+      "collector": "mount.inventory",
+      "resource_id": "node-example-01/mount-nfs-a",
+      "phase": "idle",
+      "poll_interval_seconds": 15,
+      "stale_after_seconds": 45,
+      "last_attempt_id": "session-example-01:481:mount.inventory:mount-nfs-a"
+    },
+    {
+      "collector": "nfs.nstatus",
+      "resource_id": "node-example-01/mount-nfs-a",
+      "phase": "idle",
+      "poll_interval_seconds": 15,
+      "stale_after_seconds": 45,
+      "last_attempt_id": "session-example-01:481:nfs.nstatus:mount-nfs-a"
+    },
+    {
+      "collector": "nfsstat.client",
+      "resource_id": "node-example-01/nfs-client",
+      "phase": "idle",
+      "poll_interval_seconds": 15,
+      "stale_after_seconds": 45,
+      "last_attempt_id": "session-example-01:481:nfsstat.client:nfs-client"
+    }
+  ]
+}

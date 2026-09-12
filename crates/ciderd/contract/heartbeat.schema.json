@@ -1,0 +1,930 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "node_id",
+    "boot_id",
+    "agent_session_id",
+    "sequence",
+    "created_at",
+    "resources",
+    "relationships",
+    "collections",
+    "events",
+    "tombstones",
+    "message_type",
+    "agent_generation",
+    "clock_id",
+    "monotonic_ns",
+    "agent",
+    "inventory",
+    "collector_states"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "node_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "boot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "agent_session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "sequence": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "maxLength": 40
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resources": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "maxItems": 8192,
+      "items": {
+        "$ref": "#/$defs/relationship"
+      }
+    },
+    "collections": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/collection"
+      }
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "tombstones": {
+      "type": "array",
+      "maxItems": 8192,
+      "items": {
+        "$ref": "#/$defs/tombstone"
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "maxProperties": 32
+    },
+    "message_type": {
+      "const": "heartbeat"
+    },
+    "agent_generation": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "maxLength": 39
+    },
+    "clock_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "monotonic_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "maxLength": 39
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "target",
+        "os_version",
+        "os_build",
+        "delivery_mode",
+        "heartbeat_interval_seconds",
+        "quarantined_workers",
+        "discarded_samples_total",
+        "dropped_events_total",
+        "payload_limited"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "os_version": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "os_build": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "delivery_mode": {
+          "const": "latest"
+        },
+        "heartbeat_interval_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "quarantined_workers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "discarded_samples_total": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 39
+        },
+        "dropped_events_total": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 39
+        },
+        "payload_limited": {
+          "type": "boolean"
+        }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "included"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 39
+        },
+        "included": {
+          "type": "boolean"
+        }
+      }
+    },
+    "collector_states": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "collector",
+          "resource_id",
+          "phase",
+          "poll_interval_seconds",
+          "stale_after_seconds"
+        ],
+        "properties": {
+          "collector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "resource_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "phase": {
+            "enum": [
+              "idle",
+              "running",
+              "timed_out_pending_exit",
+              "disabled"
+            ]
+          },
+          "poll_interval_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 604800
+          },
+          "stale_after_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 604800
+          },
+          "last_attempt_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:macos-storage:heartbeat:2.0",
+  "title": "Rust macOS storage daemon heartbeat v2.0",
+  "description": "Proposed heartbeat contract. Repeated collections retain their identity and sample time; heartbeat sequence identifies an outbound live snapshot, not a fresh collection. Apply the additional semantic rules in the guide.",
+  "$defs": {
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "unit",
+        "availability",
+        "attributes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^storage\\.[a-z0-9_.]+$",
+          "maxLength": 160
+        },
+        "kind": {
+          "enum": [
+            "counter",
+            "gauge",
+            "state"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 48
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "unsupported",
+            "permission_denied",
+            "timeout",
+            "failed",
+            "parse_error",
+            "not_collected"
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "live",
+            "cached",
+            "stale",
+            "unknown"
+          ]
+        },
+        "value_type": {
+          "enum": [
+            "integer",
+            "number",
+            "boolean",
+            "string"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "counter_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "attributes": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": [
+              "string",
+              "boolean",
+              "number"
+            ]
+          }
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "source_field": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "effective_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensions": {
+          "type": "object",
+          "maxProperties": 16
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "availability": {
+                "const": "available"
+              }
+            },
+            "required": [
+              "availability"
+            ]
+          },
+          "then": {
+            "required": [
+              "value",
+              "value_type",
+              "freshness"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "value"
+                  ]
+                },
+                {
+                  "required": [
+                    "value_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "freshness"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "integer"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^(0|-?[1-9][0-9]*)$",
+                "maxLength": 41
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "number"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "boolean"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "string"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "counter"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "properties": {
+                  "availability": {
+                    "const": "available"
+                  }
+                },
+                "required": [
+                  "availability"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "counter_epoch"
+            ],
+            "properties": {
+              "value_type": {
+                "const": "integer"
+              },
+              "value": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "maxLength": 40
+              }
+            }
+          }
+        }
+      ]
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource_id",
+        "resource_type",
+        "revision",
+        "observed_at",
+        "identity_confidence",
+        "attributes"
+      ],
+      "properties": {
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "resource_type": {
+          "enum": [
+            "host",
+            "controller",
+            "physical_device",
+            "media",
+            "virtual_device",
+            "apfs_container",
+            "filesystem",
+            "snapshot",
+            "mount",
+            "nfs_endpoint",
+            "nfs_export",
+            "nfs_client",
+            "process",
+            "network_interface",
+            "storage_pool",
+            "provider_resource"
+          ]
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 40
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "identity_confidence": {
+          "enum": [
+            "strong",
+            "host_local",
+            "weak",
+            "unknown"
+          ]
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "support"
+            ],
+            "properties": {
+              "support": {
+                "enum": [
+                  "supported",
+                  "unsupported",
+                  "unknown"
+                ]
+              },
+              "checked_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            }
+          }
+        }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relationship_id",
+        "revision",
+        "observed_at",
+        "from_resource_id",
+        "to_resource_id",
+        "relation"
+      ],
+      "properties": {
+        "relationship_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 40
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "from_resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "to_resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "relation": {
+          "enum": [
+            "attached_to",
+            "contains",
+            "backed_by",
+            "snapshot_of",
+            "mounts",
+            "accesses",
+            "observed_by",
+            "exported_from"
+          ]
+        },
+        "attributes": {
+          "type": "object"
+        }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collection_id",
+        "resource_id",
+        "collector",
+        "adapter_version",
+        "source_version",
+        "started_at",
+        "finished_at",
+        "clock_id",
+        "started_monotonic_ns",
+        "finished_monotonic_ns",
+        "status",
+        "metrics"
+      ],
+      "properties": {
+        "collection_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "collector": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "adapter_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "source_version": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "clock_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "started_monotonic_ns": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 40
+        },
+        "finished_monotonic_ns": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 40
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "partial",
+            "unsupported",
+            "permission_denied",
+            "timeout",
+            "failed",
+            "parse_error",
+            "skipped",
+            "gone"
+          ]
+        },
+        "worker_state": {
+          "enum": [
+            "exited",
+            "timed_out_pending_exit",
+            "not_started",
+            "late_result"
+          ]
+        },
+        "metrics": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/metric"
+          }
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "domain",
+            "code",
+            "message"
+          ],
+          "properties": {
+            "domain": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "code": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "exit_code": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "signal": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reasons": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            }
+          }
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "raw_artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "extensions": {
+          "type": "object",
+          "maxProperties": 32
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "resource_id",
+        "observed_at",
+        "source",
+        "category",
+        "severity",
+        "message"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "category": {
+          "enum": [
+            "media",
+            "integrity",
+            "capacity",
+            "availability",
+            "performance",
+            "collector",
+            "lifecycle",
+            "diagnostic"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "details": {
+          "type": "object"
+        },
+        "raw_artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_type",
+        "entity_id",
+        "revision",
+        "observed_at",
+        "reason"
+      ],
+      "properties": {
+        "entity_type": {
+          "enum": [
+            "resource",
+            "relationship"
+          ]
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 40
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "inventory": {
+            "properties": {
+              "included": {
+                "const": false
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "resources": {
+            "maxItems": 0
+          },
+          "relationships": {
+            "maxItems": 0
+          },
+          "tombstones": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Containers</key>
+	<array>
+		<dict>
+			<key>APFSContainerUUID</key>
+			<string>00000000-0000-4000-8000-000000000010</string>
+			<key>CapacityCeiling</key>
+			<integer>900000</integer>
+			<key>CapacityFree</key>
+			<integer>100000</integer>
+			<key>ContainerReference</key>
+			<string>disk2</string>
+			<key>PhysicalStores</key>
+			<array>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk0s2</string>
+					<key>DiskUUID</key>
+					<string>00000000-0000-4000-8000-000000000002</string>
+					<key>Size</key>
+					<integer>900000</integer>
+				</dict>
+			</array>
+			<key>Volumes</key>
+			<array>
+				<dict>
+					<key>APFSVolumeUUID</key>
+					<string>00000000-0000-4000-8000-000000000020</string>
+					<key>CapacityInUse</key>
+					<integer>500000</integer>
+					<key>CapacityQuota</key>
+					<integer>0</integer>
+					<key>CapacityReserve</key>
+					<integer>0</integer>
+					<key>DeviceIdentifier</key>
+					<string>disk2s1</string>
+					<key>Locked</key>
+					<false/>
+					<key>Name</key>
+					<string>Example Data</string>
+					<key>Roles</key>
+					<array>
+						<string>Data</string>
+					</array>
+				</dict>
+				<dict>
+					<key>APFSVolumeUUID</key>
+					<string>00000000-0000-4000-8000-000000000021</string>
+					<key>CapacityInUse</key>
+					<integer>300000</integer>
+					<key>DeviceIdentifier</key>
+					<string>disk2s2</string>
+					<key>Locked</key>
+					<false/>
+					<key>Name</key>
+					<string>Example System</string>
+					<key>Roles</key>
+					<array>
+						<string>System</string>
+					</array>
+				</dict>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

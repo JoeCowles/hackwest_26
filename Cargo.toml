@@ -1,0 +1,12 @@
+[workspace]
+members = ["crates/ciderd"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+rust-version = "1.97"
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>registry_id</key>
+		<string>1234</string>
+		<key>statistics</key>
+		<dict>
+			<key>Bytes (Read)</key>
+			<string>18446744073709551615</string>
+			<key>Bytes (Write)</key>
+			<string>100</string>
+			<key>Operations (Read)</key>
+			<string>3</string>
+			<key>Total Time (Write)</key>
+			<string>700</string>
+		</dict>
+	</dict>
+</array>
+</plist>

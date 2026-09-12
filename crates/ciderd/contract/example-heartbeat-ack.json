@@ -1,0 +1,8 @@
+{
+  "schema_version": "2.0",
+  "agent_session_id": "session-example-01",
+  "accepted_sequence": "481",
+  "inventory_revision": "12",
+  "request_inventory": false,
+  "server_received_at": "2026-09-12T19:00:00.100Z"
+}

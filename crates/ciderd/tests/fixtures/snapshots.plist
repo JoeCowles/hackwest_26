@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Snapshots</key>
+	<array>
+		<dict>
+			<key>Name</key>
+			<string>Example snapshot</string>
+			<key>Purgeable</key>
+			<true/>
+			<key>SnapshotUUID</key>
+			<string>00000000-0000-4000-8000-000000000030</string>
+			<key>XID</key>
+			<integer>9007199254740993</integer>
+		</dict>
+	</array>
+</dict>
+</plist>

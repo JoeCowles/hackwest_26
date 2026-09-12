@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "mounts": [
+    {
+      "fsid": [
+        12,
+        34
+      ],
+      "mount_path": "/Volumes/Example",
+      "mount_path_hex": "2f566f6c756d65732f4578616d706c65",
+      "source": "/dev/disk2s1",
+      "source_hex": "2f6465762f6469736b327331",
+      "filesystem_type": "apfs",
+      "local": true,
+      "read_only": false,
+      "capacity": {
+        "block_size": "4096",
+        "blocks": "9007199254740993",
+        "blocks_free": "3",
+        "blocks_available": "2",
+        "files": "100",
+        "files_free": "90"
+      }
+    }
+  ]
+}
