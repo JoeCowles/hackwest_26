@@ -77,7 +77,7 @@ records and 16 MiB, with a 256 KiB per-collection limit. Metadata is capped at
 | Fresh capacity | Isolated `statfs` worker, verifies expected fsid before accepting data |
 | NFS client | Versioned `nfsstat -f JSON -c` tables, host-client scope |
 | NFS mount status | Isolated SDK-backed `VFS_CTL_NSTATUS`, bounded size/count validation |
-| SMART, optional | Configured `smartctl -x --json=v -n standby,2`; exit bitmask and exact integers |
+| SMART, optional | Configured `smartctl -x --json=v -n standby,2`; exact NVMe values and strictly admitted ATA 5/197/198 sector gauges |
 
 Cached capacity accompanies the `mount.inventory` collection that acquired it;
 fresh capacity uses `filesystem.capacity`. This provenance distinction prevents
@@ -166,9 +166,12 @@ checker; it is not part of the shipped runtime.
 
 Physical diskutil identities are explicitly scoped to a boot and BSD locator.
 An undetected replacement reusing a locator between reconciliations cannot be
-resolved reliably from that output. IOKit counter epochs use registry identity;
-SMART uses reported identity when available. Strong persistent physical identity
-and Disk Arbitration event-driven lifecycle enrichment remain future work.
+resolved reliably from that output. IOKit counter epochs use registry identity.
+Every SMART reading carries a private fixed-size continuity marker; a reported
+WWN takes precedence over reported serial/model/protocol identity, while missing
+reported identity is explicitly `caller_epoch_only` and weak. The scheduled
+adapter validates a reported SMART device locator against its admitted physical
+resource. Disk Arbitration event-driven lifecycle enrichment remains future work.
 
 Foundation capacity estimates, APFS purgeability estimates, NFSv4.1 supplementary
 tables, NFS server/provider metrics, active probes and diagnostics are not enabled.
@@ -177,3 +180,14 @@ configured diagnostic/write-probe switches are rejected if enabled. Native
 NSTATUS has been compiled and tested for unavailable/gone cases; successful
 NSTATUS against a real NFS mount, Intel macOS, signed packaging and installed
 launchd operation still require target-environment verification.
+
+Configured NFS user quotas are collected using read-only rquota v1 GETQUOTA over
+UDP. Add `[nfs_quotas]` and explicit `[[nfs_quotas.targets]]` entries; the example
+configuration defaults to no targets. Quotas use the real process AUTH_SYS UID,
+GID and up to 16 real supplementary groups. The queried UID is never used as the
+caller identity. Each target runs in the existing bounded remote subprocess pool;
+slow DNS, portmapper or rquotad cannot block five-second heartbeats. Missing quota,
+permission denial, timeout and unsupported service remain explicit observations.
+See [NFS quota setup and verification](../../docs/nfs-user-quotas.md). User quotas
+apply to server filesystems and can overlap across exports; do not sum them or
+confuse them with APFS volume quota settings.

@@ -49,7 +49,7 @@ sudo target/release/simple-nfs-server mount
 | --- | --- | --- |
 | `setup-server` | yes | Write the export to `/etc/exports`, enable and start `nfsd` |
 | `teardown-server [--stop-nfsd]` | yes | Remove the export; optionally stop `nfsd` if nothing else is exported |
-| `mount` | yes | Mount the export and report the *negotiated* options |
+| `mount` | yes | Mount the configured export, verify its source, and report observed mount flags |
 | `unmount` | yes | Unmount it |
 
 ## Layout
@@ -75,19 +75,32 @@ sudo target/release/simple-nfs-server mount
 The block markers retain their original name so existing exports can still be
 updated or removed. Hand-written exports outside the block are preserved. The file is backed up to
 `/etc/exports.orchard-backup.<timestamp>` before every change, the result is
-validated with `nfsd checkexports`, and the backup is restored automatically if
-validation fails. `teardown-server` removes only the block and refuses
+validated with `nfsd checkexports`, and the original content (or original file
+absence) is restored if validation fails or the validator cannot run. Malformed,
+unclosed, or duplicate managed blocks stop the operation before rewriting the
+file. Unmanaged text retains its original bytes. `teardown-server` removes only the block and refuses
 `--stop-nfsd` while other exports remain.
 
 The config will not load without an explicit client restriction
 (`allowed_network` + `allowed_mask`, or `allowed_hosts`). There is deliberately
-no default that exports to everyone.
+no default that exports to everyone. Empty host restrictions, malformed subnet
+masks, relative paths, path traversal components, and multiple options hidden
+inside a single option string are rejected. Export path spaces and quotes are
+escaped for the native exports-file format. Numeric IPv4 and IPv6 subnet masks
+are supported. Repeated separators and trailing slashes are normalized when the
+config loads, without accessing remote paths. Configure client restrictions and
+identity mapping through their dedicated fields. Extra options must be single
+tokens using letters, digits, `-`, `_`, `.`, `=`, or `:`.
 
 ## Mount options
 
 The client defaults to `vers=3,resvport,rw,hard,intr`. Adjust `nfs_vers` and
-`mount_opts` in the configuration as needed. The mount command prints the
-resulting mount options once it completes.
+`mount_opts` in the configuration as needed. Both mount and unmount verify the
+configured source before using an occupied mountpoint. Source matching is exact;
+use the same hostname or address as the existing mount. The mount command checks
+that the requested export is present after the command succeeds, then prints
+the flags reported by `mount`. These flags do not establish the negotiated NFS
+version or transport.
 
 ## Tests
 
@@ -97,7 +110,9 @@ cargo clippy --all-targets
 ```
 
 Unit tests cover the pure logic: export-line rendering, config validation,
-managed-block rewriting and idempotence, and mount-line parsing. Operations that
+managed-block validation, byte preservation, rollback on validator failure,
+idempotence, mount-line parsing, and source matching. Rollback tests use temporary
+files; no test changes `/etc/exports`, runs `nfsd`, or mounts a filesystem. Operations that
 need root or a live `nfsd` require manual integration verification.
 
 ## Teardown

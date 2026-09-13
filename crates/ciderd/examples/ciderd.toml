@@ -45,3 +45,15 @@ recent_sample_history = 0
 [tools]
 # Optional: pin a verified installation path before enabling SMART.
 # smartctl = "/opt/homebrew/sbin/smartctl"
+
+# Optional, read-only NFS user quotas. Empty targets is unconfigured.
+# Server filesystem quotas may span multiple exports. Never sum these rows.
+[nfs_quotas]
+interval_seconds = 60
+timeout_seconds = 3
+# [[nfs_quotas.targets]]
+# server = "nfs.internal.example"
+# export_path = "/srv/inference"
+# uid = 501
+# display_label = "Inference service"
+# port = 875 # omit for bounded UDP portmapper lookup on the configured server

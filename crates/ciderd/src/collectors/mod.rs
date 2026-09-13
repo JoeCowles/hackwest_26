@@ -5,9 +5,9 @@ mod nfs;
 mod smart;
 
 pub use inventory::{parse_apfs, parse_inventory, parse_iokit, parse_snapshots};
-pub use mounts::{parse_capacity, parse_mounts};
+pub use mounts::{parse_capacity, parse_mount_identity, parse_mounts};
 pub use nfs::{parse_nfs, parse_nfs_status};
-pub use smart::parse_smart;
+pub use smart::{parse_smart, parse_smart_with_locator};
 
 use crate::model::{Attributes, Metric, Relationship, Resource};
 use anyhow::{ensure, Context, Result};
@@ -259,3 +259,6 @@ fn validate_samples(collected: &Collected) -> Result<()> {
     }
     Ok(())
 }
+
+mod quota;
+pub use quota::parse_nfs_quota;

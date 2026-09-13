@@ -81,6 +81,7 @@ fn main() -> Result<()> {
         result
     });
     let worker = runtime.spawn(workers::run(state.clone(), stop.clone()));
+    let notifications = runtime.spawn(orchard_server::notifications::run(state.clone(), stop.clone()));
     tracing::info!(address=%url,credentials=%files.credential_path.display(),"Orchard Server started; credentials are not logged");
     let desktop_result: Result<()>;
     #[cfg(feature = "desktop")]
@@ -110,6 +111,7 @@ fn main() -> Result<()> {
             .await
             .context("Server shutdown timed out")???;
         worker.await?;
+        notifications.await?;
         state.db.close().await;
         Ok::<(), anyhow::Error>(())
     })?;

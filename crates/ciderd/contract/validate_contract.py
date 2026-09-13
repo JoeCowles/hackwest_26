@@ -294,8 +294,9 @@ def main(directory: Path) -> None:
     print("PASS: duplicate/out-of-order/retired-generation liveness fencing")
     cfg=tomllib.loads((directory.parent/"examples"/"ciderd.toml").read_text())
     require(cfg["heartbeat"]["endpoint"].startswith("https://"),"HTTPS required")
-    require(cfg["heartbeat"]["request_timeout_seconds"] < cfg["heartbeat"]["interval_seconds"],
-            "Fixture request deadline must fit its interval")
+    require(cfg["heartbeat"]["interval_seconds"] == 5, "Fixture heartbeat cadence must remain five seconds")
+    require(0 < cfg["heartbeat"]["connect_timeout_seconds"] <= cfg["heartbeat"]["request_timeout_seconds"] <= 300,
+            "Fixture connection/request deadlines must match runtime bounds")
     require(cfg["heartbeat"]["delivery_mode"]=="latest", "Latest-state fixture required")
     require(not cfg["collection"]["active_write_probes_enabled"], "Active writes must be opt-in")
     launch=plistlib.loads((directory.parent/"examples"/"org.example.ciderd.plist").read_bytes())

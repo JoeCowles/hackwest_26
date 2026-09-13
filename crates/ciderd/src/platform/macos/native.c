@@ -1,6 +1,7 @@
-/* SDK-owned layouts only. This shim never issues storage commands or traverses a mount. */
+/* SDK-owned layouts. Native identity acquisition runs only in supervised workers. */
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
+#include <DiskArbitration/DiskArbitration.h>
 #include <IOKit/storage/IOBlockStorageDriver.h>
 #include <sys/mount.h>
 #include <sys/sysctl.h>
@@ -29,6 +30,110 @@ static void put_uint(CFMutableDictionaryRef dict, CFStringRef key, uint64_t n) {
     CFRelease(value);
 }
 
+/* Inspect only each driver's direct IOService children and their own properties. */
+static void direct_media(io_registry_entry_t driver, CFMutableDictionaryRef row, unsigned *records) {
+    io_iterator_t children = IO_OBJECT_NULL;
+    CFMutableArrayRef candidates = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+    bool ok = candidates && IORegistryEntryGetChildIterator(driver, kIOServicePlane, &children) == KERN_SUCCESS;
+    io_object_t child;
+    while (ok && (child = IOIteratorNext(children)) != IO_OBJECT_NULL) {
+        if (++*records > RECORD_LIMIT) { IOObjectRelease(child); ok = false; break; }
+        if (IOObjectConformsTo(child, "IOMedia")) {
+            CFTypeRef whole = IORegistryEntryCreateCFProperty(child, CFSTR("Whole"), NULL, 0);
+            CFTypeRef bsd = IORegistryEntryCreateCFProperty(child, CFSTR("BSD Name"), NULL, 0);
+            uint64_t registry_id;
+            if (!whole || CFGetTypeID(whole) != CFBooleanGetTypeID() ||
+                !bsd || CFGetTypeID(bsd) != CFStringGetTypeID() ||
+                IORegistryEntryGetRegistryEntryID(child, &registry_id) != KERN_SUCCESS) ok = false;
+            else {
+                CFMutableDictionaryRef media = CFDictionaryCreateMutable(NULL, 0,
+                    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+                CFDictionarySetValue(media, CFSTR("whole"), whole);
+                CFDictionarySetValue(media, CFSTR("bsd_name"), bsd);
+                put_uint(media, CFSTR("registry_entry_id"), registry_id);
+                CFArrayAppendValue(candidates, media); CFRelease(media);
+            }
+            if (whole) CFRelease(whole);
+            if (bsd) CFRelease(bsd);
+        }
+        IOObjectRelease(child);
+    }
+    if (children) IOObjectRelease(children);
+    CFDictionarySetValue(row, CFSTR("media_mapping_state"), ok ? CFSTR("ok") : CFSTR("unavailable"));
+    if (candidates) { CFDictionarySetValue(row, CFSTR("whole_media_candidates"), candidates); CFRelease(candidates); }
+}
+
+static int export_plist(CFPropertyListRef value, unsigned char **out, size_t *length) {
+    *out = NULL; *length = 0;
+    CFErrorRef error = NULL;
+    CFDataRef data = CFPropertyListCreateData(NULL, value, kCFPropertyListBinaryFormat_v1_0, 0, &error);
+    if (error) CFRelease(error);
+    if (!data) return EIO;
+    CFIndex size = CFDataGetLength(data);
+    int result = 0;
+    if (size <= 0 || (uint64_t)size > OUTPUT_LIMIT) result = EOVERFLOW;
+    else if (!(*out = malloc((size_t)size))) result = ENOMEM;
+    else { memcpy(*out, CFDataGetBytePtr(data), (size_t)size); *length = (size_t)size; }
+    CFRelease(data);
+    return result;
+}
+
+/* Caller verifies this exact local mount's fsid/source both before and after. */
+int storage_mount_identity(const char *path, unsigned char **out, size_t *length) {
+    *out = NULL; *length = 0;
+    DASessionRef session = DASessionCreate(NULL);
+    if (!session) return EIO;
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, strlen(path), true);
+    DADiskRef disk = url ? DADiskCreateFromVolumePath(NULL, session, url) : NULL;
+    if (url) CFRelease(url);
+    if (!disk) { CFRelease(session); return ENOENT; }
+    CFDictionaryRef description = DADiskCopyDescription(disk);
+    CFMutableDictionaryRef row = CFDictionaryCreateMutable(NULL, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (description) {
+        CFTypeRef uuid = CFDictionaryGetValue(description, kDADiskDescriptionVolumeUUIDKey);
+        if (uuid && CFGetTypeID(uuid) == CFUUIDGetTypeID()) {
+            CFStringRef text = CFUUIDCreateString(NULL, uuid);
+            if (text) { CFDictionarySetValue(row, CFSTR("volume_uuid"), text); CFRelease(text); }
+        }
+        CFTypeRef bsd = CFDictionaryGetValue(description, kDADiskDescriptionMediaBSDNameKey);
+        if (bsd && CFGetTypeID(bsd) == CFStringGetTypeID()) CFDictionarySetValue(row, CFSTR("media_bsd_name"), bsd);
+        CFRelease(description);
+    }
+    io_service_t media = DADiskCopyIOMedia(disk);
+    if (media) {
+        uint64_t registry_id;
+        if (IORegistryEntryGetRegistryEntryID(media, &registry_id) == KERN_SUCCESS)
+            put_uint(row, CFSTR("media_registry_id"), registry_id);
+        // A boot mount may be an AppleAPFSSnapshot. Its direct IOService parent
+        // is authoritative volume ancestry, unlike a guessed BSD suffix.
+        if (IOObjectConformsTo(media, "AppleAPFSSnapshot")) {
+            io_registry_entry_t parent = IO_OBJECT_NULL;
+            if (IORegistryEntryGetParentEntry(media, kIOServicePlane, &parent) == KERN_SUCCESS) {
+                if (IOObjectConformsTo(parent, "AppleAPFSVolume")) {
+                    CFTypeRef uuid = IORegistryEntryCreateCFProperty(parent, CFSTR("UUID"), NULL, 0);
+                    CFTypeRef bsd = IORegistryEntryCreateCFProperty(parent, CFSTR("BSD Name"), NULL, 0);
+                    uint64_t parent_id;
+                    if (uuid && CFGetTypeID(uuid) == CFStringGetTypeID() && bsd &&
+                        CFGetTypeID(bsd) == CFStringGetTypeID() &&
+                        IORegistryEntryGetRegistryEntryID(parent, &parent_id) == KERN_SUCCESS) {
+                        CFDictionarySetValue(row, CFSTR("parent_volume_uuid"), uuid);
+                        CFDictionarySetValue(row, CFSTR("parent_media_bsd_name"), bsd);
+                        put_uint(row, CFSTR("parent_media_registry_id"), parent_id);
+                    }
+                    if (uuid) CFRelease(uuid);
+                    if (bsd) CFRelease(bsd);
+                }
+                IOObjectRelease(parent);
+            }
+        }
+        IOObjectRelease(media);
+    }
+    int result = export_plist(row, out, length);
+    CFRelease(row); CFRelease(disk); CFRelease(session);
+    return result;
+}
+
 /* The returned malloc buffer is owned by Rust and released via storage_native_free. */
 int storage_iokit(unsigned char **out, size_t *length) {
     *out = NULL; *length = 0;
@@ -40,6 +145,7 @@ int storage_iokit(unsigned char **out, size_t *length) {
     if (!rows) { IOObjectRelease(iterator); return ENOMEM; }
     io_object_t entry;
     int error = 0;
+    unsigned media_records = 0;
     while ((entry = IOIteratorNext(iterator)) != IO_OBJECT_NULL) {
         if (CFArrayGetCount(rows) >= RECORD_LIMIT) { IOObjectRelease(entry); error = EOVERFLOW; break; }
         uint64_t registry_id;
@@ -49,6 +155,7 @@ int storage_iokit(unsigned char **out, size_t *length) {
         CFMutableDictionaryRef row = CFDictionaryCreateMutable(NULL, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         put_uint(row, CFSTR("registry_id"), registry_id);
+        direct_media(entry, row, &media_records);
         CFTypeRef stats = IORegistryEntryCreateCFProperty(entry, CFSTR(kIOBlockStorageDriverStatisticsKey), NULL, 0);
         CFMutableDictionaryRef normalized = CFDictionaryCreateMutable(NULL, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);

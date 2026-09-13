@@ -1,0 +1,12 @@
+{
+  "fsid": [
+    12,
+    34
+  ],
+  "source": "/dev/disk2s1",
+  "volume_uuid": "VOLUME-UUID",
+  "media_bsd_name": "disk2s1",
+  "media_registry_id": "42",
+  "state": "ok",
+  "reason": null
+}

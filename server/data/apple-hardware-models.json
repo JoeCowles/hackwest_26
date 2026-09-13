@@ -1,0 +1,246 @@
+{
+  "version": "2026-09-12.1",
+  "sources": [
+    "https://support.apple.com/en-us/108052",
+    "https://support.apple.com/en-us/102869",
+    "https://support.apple.com/en-us/102852",
+    "https://support.apple.com/en-us/108054"
+  ],
+  "models": {
+    "Mac17,7": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M5 Pro or M5 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac17,9": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M5 Pro or M5 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac17,6": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, M5 Pro or M5 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac17,8": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, M5 Pro or M5 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac17,2": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M5",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac16,1": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M4",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac16,6": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M4 Pro or M4 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac16,8": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M4 Pro or M4 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac16,7": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, M4 Pro or M4 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac16,5": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, M4 Pro or M4 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac15,3": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M3",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac15,6": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M3 Pro or M3 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac15,8": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M3 Pro or M3 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac15,10": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, M3 Pro or M3 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac15,7": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, M3 Pro or M3 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac15,9": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, M3 Pro or M3 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac15,11": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, M3 Pro or M3 Max",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac14,5": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, 2023",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac14,9": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, 2023",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac14,6": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, 2023",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac14,10": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, 2023",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac14,7": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 13-inch, M2",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "MacBookPro18,3": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, 2021",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "MacBookPro18,4": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 14-inch, 2021",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "MacBookPro18,1": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, 2021",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "MacBookPro18,2": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 16-inch, 2021",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "MacBookPro17,1": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Pro 13-inch, M1",
+      "source": "https://support.apple.com/en-us/108052"
+    },
+    "Mac17,4": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air 15-inch, M5",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac17,3": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air 13-inch, M5",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac16,13": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air 15-inch, M4",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac16,12": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air 13-inch, M4",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac15,13": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air 15-inch, M3",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac15,12": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air 13-inch, M3",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac14,15": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air 15-inch, M2",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac14,2": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air M2",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "MacBookAir10,1": {
+      "machine_family": "macbook",
+      "display_name": "MacBook Air M1",
+      "source": "https://support.apple.com/en-us/102869"
+    },
+    "Mac16,11": {
+      "machine_family": "mac_mini",
+      "display_name": "Mac mini 2024",
+      "source": "https://support.apple.com/en-us/102852"
+    },
+    "Mac16,10": {
+      "machine_family": "mac_mini",
+      "display_name": "Mac mini 2024",
+      "source": "https://support.apple.com/en-us/102852"
+    },
+    "Mac14,3": {
+      "machine_family": "mac_mini",
+      "display_name": "Mac mini M2",
+      "source": "https://support.apple.com/en-us/102852"
+    },
+    "Mac14,12": {
+      "machine_family": "mac_mini",
+      "display_name": "Mac mini M2 Pro",
+      "source": "https://support.apple.com/en-us/102852"
+    },
+    "Macmini9,1": {
+      "machine_family": "mac_mini",
+      "display_name": "Mac mini M1",
+      "source": "https://support.apple.com/en-us/102852"
+    },
+    "Mac16,3": {
+      "machine_family": "imac",
+      "display_name": "iMac 24-inch, 2024, four ports",
+      "source": "https://support.apple.com/en-us/108054"
+    },
+    "Mac16,2": {
+      "machine_family": "imac",
+      "display_name": "iMac 24-inch, 2024, two ports",
+      "source": "https://support.apple.com/en-us/108054"
+    },
+    "Mac15,5": {
+      "machine_family": "imac",
+      "display_name": "iMac 24-inch, 2023, four ports",
+      "source": "https://support.apple.com/en-us/108054"
+    },
+    "Mac15,4": {
+      "machine_family": "imac",
+      "display_name": "iMac 24-inch, 2023, two ports",
+      "source": "https://support.apple.com/en-us/108054"
+    },
+    "iMac21,1": {
+      "machine_family": "imac",
+      "display_name": "iMac 24-inch, M1",
+      "source": "https://support.apple.com/en-us/108054"
+    },
+    "iMac21,2": {
+      "machine_family": "imac",
+      "display_name": "iMac 24-inch, M1",
+      "source": "https://support.apple.com/en-us/108054"
+    }
+  }
+}

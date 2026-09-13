@@ -19,4 +19,5 @@ fn main() {
         .compile("storage_native");
     println!("cargo:rustc-link-lib=framework=IOKit");
     println!("cargo:rustc-link-lib=framework=CoreFoundation");
+    println!("cargo:rustc-link-lib=framework=DiskArbitration");
 }

@@ -1,9 +1,9 @@
-use super::{SystemInfo, WorkerRequest, MAX_WORKER_OUTPUT};
-use anyhow::{ensure, Context, Result};
-use serde_json::{json, Value};
+use super::{MAX_WORKER_OUTPUT, SystemInfo, WorkerRequest};
+use anyhow::{Context, Result, ensure};
+use serde_json::{Value, json};
 use std::{
     ffi::{CStr, CString},
-    mem::{size_of, MaybeUninit},
+    mem::{MaybeUninit, size_of},
     ptr,
 };
 
@@ -11,6 +11,11 @@ unsafe extern "C" {
     fn storage_fsid_values(fsid: *const libc::fsid_t, output: *mut i32);
     fn storage_iokit(output: *mut *mut u8, length: *mut usize) -> libc::c_int;
     fn storage_native_free(buffer: *mut u8);
+    fn storage_mount_identity(
+        path: *const libc::c_char,
+        output: *mut *mut u8,
+        length: *mut usize,
+    ) -> libc::c_int;
     fn storage_nstatus(
         fsid0: i32,
         fsid1: i32,
@@ -82,6 +87,7 @@ pub fn system_info() -> Result<SystemInfo> {
         boot_id: sysctl_string(c"kern.bootsessionuuid")?,
         os_version: sysctl_string(c"kern.osproductversion")?,
         os_build: sysctl_string(c"kern.osversion")?,
+        model_identifier: sysctl_string(c"hw.model").map_err(|e| e.to_string()),
         target: format!("{}-apple-darwin", std::env::consts::ARCH),
     })
 }
@@ -198,6 +204,73 @@ fn iokit() -> Result<Vec<u8>> {
     Ok(unsafe { std::slice::from_raw_parts(buffer.0, length) }.to_vec())
 }
 
+fn mount_identity(path: String, fsid: [i32; 2], source: String) -> Result<Value> {
+    ensure!(
+        path.starts_with('/')
+            && path.len() <= 4096
+            && source
+                .strip_prefix("/dev/")
+                .is_some_and(super::valid_media_name),
+        "invalid local mount identity input"
+    );
+    let request_path = CString::new(path.clone())?;
+    // MNT_NOWAIT reads the kernel mount table, avoiding network-path probes.
+    let matches = |table: &Value| {
+        table["mounts"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .filter(|r| {
+                    r["mount_path"] == path
+                        && r["source"] == source
+                        && r["fsid"] == json!(fsid)
+                        && r["local"] == true
+                        && r["filesystem_type"] != "nfs"
+                        && r["filesystem_type"] != "smbfs"
+                })
+                .count()
+                == 1
+        })
+    };
+    let failed = |reason: &str| {
+        json!({"fsid":fsid,"source":source,"state":"unavailable","reason":reason,
+        "volume_uuid":null,"media_bsd_name":null,"media_registry_id":null})
+    };
+    if !matches(&mounts()?) {
+        return Ok(failed("mount_replaced"));
+    }
+    let mut pointer = ptr::null_mut();
+    let mut length = 0;
+    // SAFETY: terminated local path and writable out parameters. Buffer is C-owned until freed below.
+    let error = unsafe { storage_mount_identity(request_path.as_ptr(), &mut pointer, &mut length) };
+    if error != 0 {
+        return Ok(failed("identity_query_failed"));
+    }
+    struct Buffer(*mut u8);
+    impl Drop for Buffer {
+        fn drop(&mut self) {
+            unsafe { storage_native_free(self.0) };
+        }
+    }
+    let buffer = Buffer(pointer);
+    ensure!(
+        !buffer.0.is_null() && length <= MAX_WORKER_OUTPUT,
+        "invalid identity output"
+    );
+    // SAFETY: successful shim result owns length initialized bytes, copied/parsed before Drop.
+    let identity: Value =
+        plist::from_bytes(unsafe { std::slice::from_raw_parts(buffer.0, length) })?;
+    if !matches(&mounts()?) {
+        return Ok(failed("mount_replaced"));
+    }
+    if identity["volume_uuid"].as_str().is_none() && identity["media_bsd_name"].as_str().is_none() {
+        return Ok(failed("identity_not_reported"));
+    }
+    Ok(
+        json!({"fsid":fsid,"source":source,"state":"ok","reason":null,
+        "volume_uuid":identity["volume_uuid"],"media_bsd_name":identity["media_bsd_name"],"media_registry_id":identity["media_registry_id"],
+        "parent_volume_uuid":identity["parent_volume_uuid"],"parent_media_bsd_name":identity["parent_media_bsd_name"],"parent_media_registry_id":identity["parent_media_registry_id"]}),
+    )
+}
+
 fn nfs_status(fsid: [i32; 2]) -> Result<Vec<u8>> {
     let mut output = [0u8; 512];
     // SAFETY: the shim takes two numeric fsid values and a bounded writable output buffer; all SDK structs stay in C.
@@ -217,9 +290,19 @@ fn nfs_status(fsid: [i32; 2]) -> Result<Vec<u8>> {
 
 pub fn worker(request: WorkerRequest) -> Result<Vec<u8>> {
     let bytes = match request {
+        WorkerRequest::NfsQuota {
+            target,
+            timeout_seconds,
+        } => serde_json::to_vec(&crate::quota::query(
+            &target,
+            std::time::Duration::from_secs(timeout_seconds),
+        ))?,
         WorkerRequest::Mounts => serde_json::to_vec(&mounts()?)?,
         WorkerRequest::Capacity { path, fsid } => serde_json::to_vec(&capacity(path, fsid)?)?,
         WorkerRequest::Iokit => iokit()?,
+        WorkerRequest::MountIdentity { path, fsid, source } => {
+            serde_json::to_vec(&mount_identity(path, fsid, source)?)?
+        }
         WorkerRequest::NfsStatus { fsid } => nfs_status(fsid)?,
     };
     ensure!(

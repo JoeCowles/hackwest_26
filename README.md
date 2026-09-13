@@ -3,12 +3,22 @@
 Rust macOS collector, Rust native central server, and an authenticated live web
 console for storage telemetry.
 
+Orchard helps an administrator review storage concerns and their evidence. The
+console includes live throughput and capacity, drive reliability observations,
+activity deviations, an attention queue, configurable Twilio SMS, stored metric
+history, capacity exhaustion scenarios, NFS user quotas, and diagnostic readiness.
+Missing evidence stays unknown. Orchard observes and notifies; the administrator
+decides how to respond.
+
 - `server/`: `orchard-server`, a native macOS control application with SQLite,
   TLS, enrollment, ingestion, and read APIs. It does not run node collectors.
 - `crates/ciderd/`: the macOS storage collector and its schema-2 wire contract,
   collectors, isolated workers, fixtures, daemon configuration, and launchd example.
 - `web/`: the Orchard Cluster Console, using live authenticated server reads.
-- `scripts/`: project-local Cargo wrapper, macOS packaging, and synthetic demo client.
+- `scripts/`: project-local Cargo wrapper, TLS integration smoke test, macOS
+  packaging, and synthetic demo client.
+- `simple-nfs-server/`: a separate administrative NFS helper, outside the monitoring
+  workspace; its tests do not change system exports or mounts.
 - `flake.nix` and `flake.lock`: the collector branch's optional Nix development environment.
 
 ## Source of truth
@@ -17,8 +27,40 @@ The [Server Spec](https://docs.google.com/document/d/1JnsZHlYPXQ1IRsMSEHeboICzqq
 defines the receiver API. Section 15 documents v1 ingestion, section 16 the live
 read API, and section 17 the ciderd compatibility endpoint. Planned monitoring
 features are not implied to be implemented by their appearance in section 14.
+Sections 20–21 document storage activity and reliability. The new operator API
+contract is being added as section 22. Prior sections 20–21 were saved through
+native Google Docs and verified by export comparison.
 The exact collector models, catalog, and JSON schemas live in
 `crates/ciderd/contract/` and `crates/ciderd/src/model.rs`.
+
+## Storage activity detection
+
+The first rule uses existing native `iokit.block` driver byte counters. It learns
+for at least 600 observed seconds and 60 intervals, then opens a finding after
+120 sustained seconds above its versioned threshold. Missing observations remain
+unavailable; they never resolve a finding. The viewer exposes findings, readiness,
+coverage, and exact interval evidence. Administrator-only relearning is a guarded
+API action. File-access detection and automated remediation remain outside
+this implementation. Attention and optional Twilio delivery are described below.
+
+```sh
+bash scripts/cargo-local.sh test --workspace --locked
+bash scripts/cargo-local.sh run -p orchard-server --example detection_example --locked
+bash scripts/cargo-local.sh build --workspace --locked
+node scripts/smoke-detection.mjs
+```
+
+The example uses synthetic time and counters. The smoke uses disposable verified
+TLS and this Mac's real collector to check admission, learning, stale observations,
+and embedded modules. Neither is a measurement of detection efficacy.
+
+## Drive reliability
+
+Passive SMART/NVMe/ATA and IOKit evidence now feeds persistent reliability findings,
+workload-qualified service-time assessment, authenticated read APIs, and the disk
+view. SMART remains opt-in; missing evidence and replacement dates remain unknown.
+See [the reliability runbook and API contract](docs/drive-reliability.md). Shared
+Server Spec section 21 is saved and export-verified through native Google Docs.
 
 ## Run the server
 
@@ -83,49 +125,99 @@ an authoritative shared filesystem identity is supplied.
 Do not send legacy v1 inventory/telemetry and schema-2 heartbeats using the same
 node identity. Existing v1 clients keep their original endpoints and contract.
 The SQLite migration adds schema-2 receiver state and raises the schema version
-to 2; an older server refuses this newer database. Back up state before running
+to 5, including detection, reliability, attention and notification state; an older
+server refuses this newer database. Back up state before running
 a newly built server against an existing installation.
 
-## Build a macOS server bundle
+## Operator workflows
 
-```sh
-bash scripts/package-macos.sh debug
+Open **Operations** in the dashboard:
+
+- **Attention** combines capacity pressure, node observation loss, activity and
+  reliability findings, and passive filesystem concerns. Acknowledgement records
+  review separately from source recovery. A live indicator exposes evaluation
+  freshness while evidence pages remain frozen until refreshed.
+- **Notifications** configures the sender, recipient and enablement with a
+  temporary administrator credential. Phone numbers are masked on reads.
+- **History** reads raw or rolled-up observations for one object and metric.
+  Capacity runway requires sufficient compatible, fresh growth evidence; the
+  forecast includes assumptions and a scenario range. It does not predict drive
+  failure or guarantee three days of warning.
+- **Quotas** reports configured NFS server user quotas through read-only rquota.
+  Quota usage and limits are separate from APFS volume quotas and filesystem
+  capacity. Missing, denied and stale records never imply an unlimited quota.
+- **Diagnostics** distinguishes disabled, unsupported, missing, failed and stale
+  collectors and passive NFS accessibility concerns. Filesystem integrity remains
+  unknown without supporting evidence.
+
+Create a private `.env` in the server's working directory, or set the process
+variables. `.env` and `.env.*` are ignored by Git:
+
+```dotenv
+TWILIO_ACCOUNT_SID=AC_your_account_sid
+TWILIO_SECRET=your_account_auth_token
 ```
 
-The script produces `dist/Orchard Server.app` with an ad-hoc signature. Developer
-ID signing and notarization remain separate release work.
+An API key secret additionally needs `TWILIO_SID=SK_your_api_key_sid`; the account
+SID alone pairs with an account Auth Token. Restart the server after changing
+credentials. In **Operations → Notifications**, set E.164 sender and recipient
+numbers, choose whether to enable SMS, and save with the administrator credential.
+Sending is disabled initially. Enablement applies to future new or escalating
+concerns; suppressed history is not replayed. Provider acceptance and handset
+delivery have separate states. Ambiguous sends are marked uncertain.
+
+See the [HTTP contract](docs/operator-api.md), [attention/SMS runbook](docs/operator-attention.md),
+[history and forecast contract](docs/metric-history.md), and [quota setup and live
+verification](docs/nfs-user-quotas.md). Original project code is [MIT licensed](LICENSE);
+existing third-party code, fonts and assets retain their own notices.
 
 ## Integration status
 
-The collector branch is integrated alongside the server and web console.
-Workspace builds/checks and all 100 tests passed; three ignored subprocess
-helpers are exercised by their parent tests. Five server compatibility tests
-cover replay/deduplication, exact wide counter rates and epochs, inventory
-upserts/tombstones, persisted receipts, and credential/privacy rejection.
-The headless server built, and the debug macOS application bundle was rebuilt
-and passed strict code-signature verification.
+The new operator workflows are undergoing final workspace and rendered-browser
+verification. The final evidence and remaining deployment boundaries are recorded
+in the operator API contract. Real SMS delivery has not been exercised. No
+packaged/signed application or production installation is implied by source checks.
 
-The real collector and packaged server also passed an isolated local TLS smoke
-test: verified certificates, CLI enrollment, private credentials/state directory,
-two accepted five-second heartbeats, real measurements through authenticated
-read APIs, and the embedded console HTML. This is not a desktop/mobile visual
-review or exhaustive hardware/NFS validation. Alert evaluation/delivery,
-historical read routes, Prometheus/SSE, and other planned APIs remain separate work.
-
-To repeat the validation on macOS:
+To repeat source validation on macOS:
 
 ```sh
-bash scripts/cargo-local.sh build --workspace --locked
 bash scripts/cargo-local.sh test --workspace --locked --no-fail-fast
 bash scripts/cargo-local.sh check --workspace --locked
 bash scripts/cargo-local.sh build --package orchard-server --no-default-features --locked
-bash scripts/package-macos.sh debug
-codesign --verify --deep --strict 'dist/Orchard Server.app'
+bash scripts/cargo-local.sh build --workspace --locked
+node --test web/tests/*.test.mjs
+node --check web/js/api.js
+node --check web/js/app.js
+node --check web/js/model.js
+node --check web/js/session.js
+node --check web/js/stage.js
+node --check web/js/views.js
+bash scripts/cargo-local.sh test --manifest-path simple-nfs-server/Cargo.toml --locked
 node scripts/smoke-ciderd.mjs
+node scripts/smoke-operators.mjs
 ```
 
-The smoke test requires Node.js and macOS OpenSSL. It uses a temporary CA,
+The ciderd smoke test requires Node.js and macOS OpenSSL. It uses a temporary CA,
 ephemeral local port, and separate state; it does not modify a running
 installation. It briefly gathers this Mac's real storage telemetry and stops
 its processes afterward. Successful runs remove temporary state; failures keep
 private diagnostic artifacts under the ignored `.codex-staging/` directory.
+The operator smoke uses a disposable loopback server with synthetic observations
+and a captured real rquota response replay. SMS remains disabled and it does not
+load the working-directory `.env`.
+
+## Optional macOS packaging
+
+Packaging and bundle verification are separate from the source checks above:
+
+```sh
+bash scripts/package-macos.sh debug
+codesign --verify --deep --strict 'dist/Orchard Server.app'
+node scripts/smoke-ciderd.mjs --packaged
+```
+
+The packaging script produces `dist/Orchard Server.app` with an ad-hoc signature.
+The packaged smoke also requires the workspace ciderd binary. Developer ID
+signing and notarization remain separate release work. These commands are
+instructions for a new packaging run, not evidence that this review rebuilt or
+validated a distributable bundle.

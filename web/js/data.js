@@ -5,5 +5,5 @@ export const MONO = 'ui-monospace,Menlo,monospace';
 export const statusColor = state => state === 'healthy' || state === 'online' ? OK
   : state === 'degraded' || state === 'warning' ? WARN
   : state === 'offline' || state === 'critical' ? CRIT : '#888b90';
-export const NAV = [['01','Overview','overview'],['02','Filesystem','fs'],['03','Throughput','io'],['04','Access','sec'],['05','Alerting','alerts'],['06','Host detail','node']];
-export const TITLES = { overview: 'Cluster overview', fs: 'Filesystem health', io: 'Throughput', sec: 'Security events', alerts: 'Alerting', node: 'Host detail' };
+export const NAV = [['01','Overview','overview'],['02','Filesystem','fs'],['03','Throughput','io'],['04','Security','sec'],['05','Host detail','node'],['06','Operations','ops']];
+export const TITLES = { overview: 'Cluster overview', fs: 'Filesystem observations', io: 'Throughput', sec: 'Security', node: 'Host detail', ops:'Storage operations' };

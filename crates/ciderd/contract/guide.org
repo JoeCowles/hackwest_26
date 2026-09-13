@@ -297,6 +297,10 @@ Use discovery initially; do not scan every poll. Select the discovered *physical
 
 NVMe JSON uses the =nvme_smart_health_information_log= family. Its temperature output is already Celsius; do not subtract Kelvin again. The reported =nsid= distinguishes namespace-specific scope from the controller-wide broadcast view. Data-unit counts use 512,000-byte units; label the multiplication as reported/quantized host bytes, not exact NAND traffic. Preserve wide integers and do not cap endurance estimates at 100.[fn:nvmeprint]
 
+The implemented ATA subset admits only IDs 5 =Reallocated_Sector_Ct=, 197 =Current_Pending_Sector=, and 198 =Offline_Uncorrectable=. It emits =storage.ata.reallocated_sectors=, =storage.ata.current_pending_sectors=, and =storage.ata.offline_uncorrectable_sectors= as exact integer sector gauges. The ID and name must match, normalized fields must be bounded integers, and the raw value must have a matching canonical decimal string. Missing rows remain absent. Vendor-renamed, packed, malformed, and duplicate-ID rows do not become measurements; duplicate IDs reject the ambiguous table. Pending and offline-uncorrectable counts may decrease, so none of these readings is a monotonic counter.
+
+Every emitted SMART metric carries bounded =extensions=: =device_identity= is a private fixed-size UUID hash, =device_identity_confidence= is =reported_wwn=, =reported_serial=, or the explicitly weak =caller_epoch_only=, and =smartctl_exit_status= plus =smartctl_exit_status_class= retain the reported bitmask provenance. The class is =clear=, =device_report= for higher health/history bits, or =tool_error= when any low acquisition bit is set. No serial, model, or WWN is published. The scheduled adapter also requires any reported =device.name= to equal the exact admitted =/dev/disk...= locator; the compatibility parser without locator context remains available to existing callers.
+
 *Exit handling:* =smartctl= returns a bitmask. Bits 0–2 concern command/access/command-check problems; bits 3–7 carry current or historical health/threshold/log findings. Parse valid JSON even when exit status is nonzero, and preserve both the raw status and decoded reasons. Bit 2 can mean a partially successful request. Do not use a generic “nonzero means no measurements” wrapper.[fn:smartman]
 
 The Darwin backend's IOKit access and command support are hardware-dependent. Root cannot make unsupported USB/RAID pass-through work, and reading health does not guarantee that self-test initiation is available. Queries can wake media. Make wake policy explicit; a skipped sleeping disk is not a failed disk.[fn:smartdarwin][fn:smartman]
@@ -694,7 +698,7 @@ struct CounterReading {
 // Collection time, unit, source and availability live in the enclosing model.
 #+end_src
 
-Keep capability support, attempt outcome, storage condition, and present-day age separate. A healthy HTTP connection cannot upgrade an old failed disk observation. No value is represented by an unavailable state and an absent =value= field, never =0= or an invented success flag. The inherited 71-entry metric catalog remains the allowlist for baseline storage measurements.
+Keep capability support, attempt outcome, storage condition, and present-day age separate. A healthy HTTP connection cannot upgrade an old failed disk observation. No value is represented by an unavailable state and an absent =value= field, never =0= or an invented success flag. The 74-entry metric catalog remains the allowlist for baseline storage measurements, including the three conservatively decoded ATA sector gauges.
 
 ** Inventory acknowledgement
 
