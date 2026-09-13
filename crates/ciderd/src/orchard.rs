@@ -31,6 +31,16 @@ pub async fn enroll(config: &Config, name: &str, token_file: &Path) -> Result<St
         }
         builder.create(parent)?;
     }
+    // Startup validates this directory before Session::open can create it.
+    // Prepare it before consuming the one-use enrollment token.
+    let mut state_directory = fs::DirBuilder::new();
+    state_directory.recursive(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::DirBuilderExt;
+        state_directory.mode(0o700);
+    }
+    state_directory.create(&config.node.state_directory)
+        .context("cannot create collector state directory before enrollment")?;
     let metadata = fs::symlink_metadata(token_file).context("cannot inspect enrollment token file")?;
     ensure!(metadata.is_file() && !metadata.file_type().is_symlink(), "enrollment token must be a regular file, not a symlink");
     #[cfg(unix)] {

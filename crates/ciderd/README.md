@@ -21,8 +21,9 @@ absolute paths, enroll once:
 ciderd enroll-server --config /etc/ciderd.toml --name studio-mac --enrollment-token-file /secure/enrollment-token
 ```
 
-This exchanges the token through the existing v1 enrollment route, stores the
-node credential as a mode-0600 file, and creates a matching local identity. It
+This prepares a private state directory before exchanging the token through the
+existing v1 enrollment route, stores the node credential as a mode-0600 file,
+and creates a matching local identity. It
 refuses to overwrite either file and never prints the credential. Do not use
 local-only `enroll` first unless provisioning the matching server identity by
 hand. A lost response or partial local write needs explicit administrator
@@ -36,8 +37,13 @@ create new samples. The server acknowledges only committed receipts and requests
 inventory when its cached revision is missing. Do not mix v1 inventory/telemetry
 writes with schema-2 heartbeats on one enrolled identity.
 
-The compatibility code has not been built or tested. The canonical receiver
-contract is section 17 of the Google Doc's Server Spec tab.
+The compatibility integration passed workspace builds/checks, all 100 tests,
+and the real collector-to-packaged-server TLS smoke test. The latter exercises
+enrollment, private state/credential creation, five-second heartbeats, and
+read-API measurements. Run `node scripts/smoke-ciderd.mjs` from the workspace
+after building both packages and the debug server bundle. The canonical
+receiver contract and validation boundaries are in section 17 of the Google
+Doc's Server Spec tab; no exhaustive hardware or visual validation is implied.
 
 ## Library and runtime
 

@@ -65,7 +65,8 @@ ciderd run --config /etc/ciderd.toml
 ```
 
 Enrollment stores a mode-0600 node credential and a matching persistent identity,
-refuses to overwrite either, and does not print the credential. Do not run the
+creates a private collector state directory before exchanging the token,
+refuses to overwrite either identity/credential file, and does not print the credential. Do not run the
 local-only `enroll` command first. Partial enrollment or a lost network response
 requires explicit recovery; the single-use exchange is not retried. Production
 collector installation uses the root-owned paths described in its README.
@@ -96,8 +97,35 @@ ID signing and notarization remain separate release work.
 
 ## Integration status
 
-The collector branch is integrated alongside the server and web console. The
-compatibility changes have not been compiled, tested, or smoke-tested, and the
-existing packaged application has not been rebuilt. Earlier core-server test
-results do not validate this integration. Alert evaluation/delivery, historical
-read routes, Prometheus/SSE, and other planned APIs remain separate work.
+The collector branch is integrated alongside the server and web console.
+Workspace builds/checks and all 100 tests passed; three ignored subprocess
+helpers are exercised by their parent tests. Five server compatibility tests
+cover replay/deduplication, exact wide counter rates and epochs, inventory
+upserts/tombstones, persisted receipts, and credential/privacy rejection.
+The headless server built, and the debug macOS application bundle was rebuilt
+and passed strict code-signature verification.
+
+The real collector and packaged server also passed an isolated local TLS smoke
+test: verified certificates, CLI enrollment, private credentials/state directory,
+two accepted five-second heartbeats, real measurements through authenticated
+read APIs, and the embedded console HTML. This is not a desktop/mobile visual
+review or exhaustive hardware/NFS validation. Alert evaluation/delivery,
+historical read routes, Prometheus/SSE, and other planned APIs remain separate work.
+
+To repeat the validation on macOS:
+
+```sh
+bash scripts/cargo-local.sh build --workspace --locked
+bash scripts/cargo-local.sh test --workspace --locked --no-fail-fast
+bash scripts/cargo-local.sh check --workspace --locked
+bash scripts/cargo-local.sh build --package orchard-server --no-default-features --locked
+bash scripts/package-macos.sh debug
+codesign --verify --deep --strict 'dist/Orchard Server.app'
+node scripts/smoke-ciderd.mjs
+```
+
+The smoke test requires Node.js and macOS OpenSSL. It uses a temporary CA,
+ephemeral local port, and separate state; it does not modify a running
+installation. It briefly gathers this Mac's real storage telemetry and stops
+its processes afterward. Successful runs remove temporary state; failures keep
+private diagnostic artifacts under the ignored `.codex-staging/` directory.

@@ -61,7 +61,13 @@ impl HttpsPeer {
             .unwrap()
             .signed_by(&key, &ca)
             .unwrap();
-        let mut tls = rustls::ServerConfig::builder()
+        // Workspace builds also enable the server's aws-lc provider. Keep this
+        // peer explicitly on ring rather than relying on global feature inference.
+        let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
             .with_no_client_auth()
             .with_single_cert(
                 vec![leaf.der().clone()],
