@@ -679,3 +679,94 @@ async fn retained_relationship_context_cannot_authorize_new_boot_disk_io() {
     hb["sequence"]=json!("2");hb["inventory"]["revision"]=json!("2");hb["resources"]=physical_heartbeat(&h)["resources"].clone();hb["relationships"]=physical_heartbeat(&h)["relationships"].clone();hb["relationships"][0]["attributes"]["boot_id"]=json!("new-boot");hb["relationships"][0]["attributes"]["agent_session_id"]=json!("new-session");
     assert_eq!(h.send(&hb).await.0,200);assert_eq!(h.device().await["properties"]["ciderd_relationships"][0]["acquisition"]["boot_id"],"new-boot");
 }
+
+#[tokio::test]
+async fn physical_removal_alerts_once_and_reappearance_allows_a_new_episode() {
+    let h = Harness::new().await;
+    let mut tx = h.state.db.begin().await.unwrap();
+    orchard_server::notifications::configure(&mut tx, &json!({"expected_revision":"initial",
+        "enabled":true,"sender":"+15555550124","recipient":"+15555550123"}), "test", Utc::now().timestamp_millis()).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut hb = h.heartbeat();
+    hb["collections"] = json!([]);
+    hb["collector_states"] = json!([]);
+    hb["resources"][0]["resource_type"] = json!("physical_device");
+    hb["resources"][0]["attributes"] = json!({"bsd_name":"disk2"});
+    let mut disk = hb["resources"][0].clone();
+    assert_eq!(h.send(&hb).await.0, 200);
+    // Omission from an upsert is not a removal.
+    hb["sequence"] = json!("2");
+    hb["resources"] = json!([]);
+    assert_eq!(h.send(&hb).await.0, 200);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attention_episodes WHERE kind='drive_removal'")
+        .fetch_one(&h.state.db).await.unwrap();
+    assert_eq!(count, 0);
+    hb["sequence"] = json!("3");
+    hb["inventory"]["revision"] = json!("2");
+    hb["tombstones"] = json!([{"entity_type":"resource","entity_id":"driver-1","revision":"2",
+        "observed_at":Utc::now().to_rfc3339(),"reason":"explicit removal"}]);
+    let result = h.send(&hb).await;
+    assert_eq!(result.0, 200, "{}", result.1);
+    assert_eq!(h.send(&hb).await.0, 200, "receipt retry is idempotent");
+    hb["sequence"] = json!("4");
+    assert_eq!(h.send(&hb).await.0, 200, "repeated tombstone is idempotent");
+    orchard_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
+    let (status, body) = request(&h.app, "GET", "/api/v1/attention?kind=drive_removal", ADMIN, Value::Null).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"][0]["status"], "open");
+    assert_eq!(body["data"][0]["observation_state"], "ok");
+    assert_eq!(body["data"][0]["notification"]["state"], "queued");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notification_outbox")
+        .fetch_one(&h.state.db).await.unwrap();
+    assert_eq!(count, 1);
+    disk["revision"] = json!("3");
+    hb["sequence"] = json!("5");
+    hb["inventory"]["revision"] = json!("3");
+    hb["tombstones"] = json!([]);
+    hb["resources"] = json!([disk]);
+    assert_eq!(h.send(&hb).await.0, 200);
+    let resolved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attention_episodes WHERE kind='drive_removal' AND status='resolved'")
+        .fetch_one(&h.state.db).await.unwrap();
+    assert_eq!(resolved, 1);
+    hb["sequence"] = json!("6");
+    hb["inventory"]["revision"] = json!("4");
+    hb["resources"] = json!([]);
+    hb["tombstones"] = json!([{"entity_type":"resource","entity_id":"driver-1","revision":"4",
+        "observed_at":Utc::now().to_rfc3339(),"reason":"explicit removal"}]);
+    assert_eq!(h.send(&hb).await.0, 200);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attention_episodes WHERE kind='drive_removal'")
+        .fetch_one(&h.state.db).await.unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn reboot_cleanup_and_driver_removal_do_not_raise_physical_drive_alerts() {
+    for reboot in [true, false] {
+        let h = Harness::new().await;
+        let mut hb = h.heartbeat();
+        hb["collections"] = json!([]);
+        hb["collector_states"] = json!([]);
+        if reboot { hb["resources"][0]["resource_type"] = json!("physical_device"); }
+        assert_eq!(h.send(&hb).await.0, 200);
+        hb["sequence"] = json!("2");
+        hb["inventory"]["revision"] = json!("2");
+        hb["resources"] = json!([]);
+        if reboot {
+            hb["agent_generation"] = json!("2");
+            hb["agent_session_id"] = json!("new-session");
+            hb["boot_id"] = json!("new-boot");
+            // Cleanup can arrive after the first heartbeat from a new boot.
+            assert_eq!(h.send(&hb).await.0, 200);
+            hb["sequence"] = json!("3");
+            hb["inventory"]["revision"] = json!("3");
+        }
+        hb["tombstones"] = json!([{"entity_type":"resource","entity_id":"driver-1","revision":"2",
+            "observed_at":Utc::now().to_rfc3339(),"reason":"explicit removal"}]);
+        let result = h.send(&hb).await;
+        assert_eq!(result.0, 200, "{}", result.1);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attention_episodes WHERE kind='drive_removal'")
+            .fetch_one(&h.state.db).await.unwrap();
+        assert_eq!(count, 0);
+    }
+}

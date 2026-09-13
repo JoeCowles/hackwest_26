@@ -682,3 +682,40 @@ async fn new_agent_session_interrupts_old_evidence_and_restart_retains_open_find
             .unwrap();
     assert_eq!(retained, vec!["open"]);
 }
+
+#[tokio::test]
+async fn sustained_service_time_degradation_queues_one_admin_notification() {
+    let h = Harness::new().await;
+    let mut tx = h.state.db.begin().await.unwrap();
+    orchard_server::notifications::configure(&mut tx, &json!({"expected_revision":"initial",
+        "enabled":true,"sender":"+15555550124","recipient":"+15555550123"}), "test", Utc::now().timestamp_millis()).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut hb = h.heartbeat();
+    let mut accounted = 0u128;
+    for n in 0u64..=73 {
+        if n > 0 {
+            next_collection(&mut hb, n + 1, &format!("performance-{n}"), (1 + n * 10) * 1_000_000_000);
+            accounted += if n <= 60 { 100_000_000 } else { 500_000_000 };
+        }
+        hb["collections"][0]["metrics"] = json!([
+            exact_counter("storage.device.read_operations_total", "operations", u128::from(n) * 100),
+            exact_counter("storage.device.read_bytes_total", "bytes", u128::from(n) * 409600),
+            exact_counter("storage.device.read_accounted_time_nanoseconds_total", "nanoseconds", accounted)
+        ]);
+        let result = h.send(&hb).await;
+        assert_eq!(result.0, 200, "{}", result.1);
+        orchard_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notification_outbox")
+            .fetch_one(&h.state.db).await.unwrap();
+        assert_eq!(count, if n < 72 { 0 } else { 1 }, "sample {n}");
+    }
+    let (_, body) = request(&h.app, "GET", "/api/v1/attention?kind=reliability", ADMIN, Value::Null).await;
+    assert_eq!(body["data"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"][0]["evidence"]["rule_id"], "iokit.read_service_time");
+    assert_eq!(body["data"][0]["notification"]["state"], "queued");
+    assert_eq!(h.send(&hb).await.0, 200);
+    orchard_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notification_outbox")
+        .fetch_one(&h.state.db).await.unwrap();
+    assert_eq!(count, 1, "replays do not notify twice");
+}

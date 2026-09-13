@@ -323,7 +323,7 @@ async fn operator_read(state: &ReadState, path: &str, mut query: Parameters, own
     validate_enum(&query,"status",&["open","resolved","all"])?;
     validate_enum(&query,"severity",&["info","warning","critical"])?;
     validate_enum(&query,"acknowledged",&["true","false"])?;
-    validate_enum(&query,"kind",&["activity","reliability","capacity","node_loss","filesystem"])?;
+    validate_enum(&query,"kind",&["activity","reliability","capacity","node_loss","filesystem","drive_removal"])?;
     if let Some(uid)=query.get("uid") {
         if uid.parse::<u32>().ok().filter(|n|*n<=i32::MAX as u32 && n.to_string()==*uid).is_none() {return Err(query_error("uid","Expected a canonical UID in 0..2147483647"));}
     }

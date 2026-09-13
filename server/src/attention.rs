@@ -273,7 +273,7 @@ async fn list_snapshot(
     if query.get("kind").is_some_and(|v| {
         !matches!(
             v.as_str(),
-            "activity" | "reliability" | "capacity" | "node_loss" | "filesystem"
+            "activity" | "reliability" | "capacity" | "node_loss" | "filesystem" | "drive_removal"
         )
     }) {
         return Err(ApiError::field("kind", "Unknown attention kind"));
@@ -521,7 +521,8 @@ pub async fn reconcile(state: &AppState, now: i64) -> ApiResult<()> {
         observed.insert(c.key.clone());
         observe_condition(&mut tx, &c, now).await?;
     }
-    for row in sqlx::query("SELECT id,source_key FROM attention_episodes WHERE status='open' AND observation_state!='unknown'").fetch_all(&mut *tx).await? {
+    // Drive removals are committed events, not gauges that become unknown when absent.
+    for row in sqlx::query("SELECT id,source_key FROM attention_episodes WHERE status='open' AND kind!='drive_removal' AND observation_state!='unknown'").fetch_all(&mut *tx).await? {
         if !observed.contains(&row.get::<String,_>("source_key")) {
             sqlx::query("UPDATE attention_episodes SET observation_state='unknown',updated_at=? WHERE id=?").bind(now).bind(row.get::<String,_>("id")).execute(&mut *tx).await?;
         }

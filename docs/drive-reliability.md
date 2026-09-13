@@ -4,7 +4,7 @@ Implemented 2026-09-13. Orchard now persists source observations and findings fo
 
 ## Collection and meaning
 
-SMART is opt-in: configure an absolute, verified `tools.smartctl` path in the node's ciderd configuration. `collection.smart_seconds` defaults to 300. Existing IOKit collection supplies errors, retries, operations, bytes, and driver-accounted time. Missing, unsupported, failed, stale, and partial observations remain explicit. No active scan, SMART self-test, write probe, remediation, or Twilio delivery is introduced.
+SMART is opt-in: configure an absolute, verified `tools.smartctl` path in the node's ciderd configuration. `collection.smart_seconds` is 15 in the example configuration. Existing IOKit collection supplies errors, retries, operations, bytes, and driver-accounted time. Missing, unsupported, failed, stale, and partial observations remain explicit. No active scan, SMART self-test, write probe, remediation, or Twilio delivery is introduced.
 
 The catalog adds integer gauges in sectors: `storage.ata.reallocated_sectors`, `storage.ata.current_pending_sectors`, and `storage.ata.offline_uncorrectable_sectors`. Server projection aliases are `ata_reallocated_sectors`, `ata_current_pending_sectors`, and `ata_offline_uncorrectable_sectors`. Recognized ATA IDs 5/197/198 require corresponding names and unambiguous exact raw counts. Packed/vendor values are omitted. A malformed or duplicate ATA table is omitted as a unit while independently usable SMART/NVMe observations survive as partial acquisition. These are reported counts, not a surface scan or bad-block addresses.
 
@@ -71,6 +71,18 @@ The DiskSummary reliability field when no source can be attributed:
 ```
 
 For counter interpretation, an initial error total of "184467440737095516160" remains history. A later distinct usable observation of "184467440737095516161" with unchanged epoch produces exact delta "1" and observed_error evidence. The source and collection IDs and timestamps identify that comparison. Repeating either receipt or collection ID produces no new comparison or fresh acquisition.
+
+## Administrator notifications
+
+The attention worker forwards warning/critical reliability findings into the
+existing notification queue when SMS is enabled. An integration test exercises
+600 seconds of comparable workload followed by 120 seconds of elevated read
+service time, and verifies one queued notification despite repeated observations
+and heartbeat replay. This uses synthetic counters and sends no real SMS.
+Negotiated USB/Thunderbolt/SATA link speed is not currently collected or evaluated;
+service-time deterioration is a performance observation, not proof of link
+renegotiation. Deploy server updates on the receiving host and enable/configure
+Operations → Notifications for SMS delivery.
 
 ## Verification and operation
 

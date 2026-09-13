@@ -24,6 +24,21 @@ without a heartbeat, or after an explicit goodbye/revocation; observations young
 than 30 seconds establish recovery when their timestamps are not in the future. Future heartbeat evidence is unknown. Active episodes take precedence over older resolved rows even after clock rollback. This is loss of observation, not proof that
 its drives failed. The collector heartbeat interval remains five seconds.
 
+Explicit schema-2 removal of a previously observed physical drive now opens a
+warning episode (`drive_removal`) in the same transaction as inventory ingestion.
+It enters the existing notification queue when SMS is enabled. Repeated tombstones
+and retried heartbeats do not create duplicate notifications. Omitted upserts,
+IOKit driver removal, and cleanup of inventory from an earlier boot do not trigger
+this alert. Both planned ejection and unexpected unplugging are reported: the
+collector cannot distinguish operator intent. The confirmed removal remains a
+recorded event even when later observations are missing. An explicit reappearance
+of the same resource identity resolves the episode; another removal creates a new
+one. A changed resource identity requires administrator review of the older
+concern. Resource reappearance does not establish physical hardware continuity or
+health. Only removals received after this server update can create these alerts;
+past removals are not reconstructed. Deploy the updated server on the receiving
+host, and configure Operations → Notifications for SMS delivery.
+
 A revision guards acknowledgement. Acknowledgement changes the revision and
 suppresses any still-queued notification and pending admission intent. A fresh severity transition clears the
 acknowledgement and receives a new revision. An already in-flight SMS cannot be
@@ -62,7 +77,7 @@ by the root integration task, separately from these module tests.
   It gathers read/diagnostic inputs before taking the database writer guard.
 - attention::list(&AppState, &BTreeMap<String,String>, now_ms) returns (rows,meta).
   Filters: node_id, object_id, status (open/resolved/all), kind
-  (activity/reliability/capacity/node_loss/filesystem), severity
+  (activity/reliability/capacity/node_loss/filesystem/drive_removal), severity
   (info/warning/critical), acknowledged (true/false); limit validates 1–500 for
   the root paginator. Unknown filters are rejected (400).
 - attention::summary(&AppState, now_ms) returns counts, notification status, and

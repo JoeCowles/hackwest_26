@@ -177,6 +177,15 @@ async fn heartbeat(
     if receiver.inventory.is_some_and(|revision| hb.inventory.revision < revision) {
         return Err(ApiError::conflict("Inventory revision moved backwards within an agent generation"));
     }
+    // Only explicit removal of a physical device observed during this boot is
+    // evidence of disconnection. Missing upserts and reboot cleanup are not.
+    let prior_devices: Vec<Resource> = if hb.inventory.included {
+        receiver.graph.resources.values().filter(|resource| {
+            resource.resource_type == "physical_device"
+                && receiver.graph.acquisition.get(&format!("resource:{}", resource.resource_id))
+                    .is_some_and(|a| a["boot_id"] == hb.boot_id)
+        }).cloned().collect()
+    } else { Vec::new() };
     let graph_changed = if hb.inventory.included {
         let changed = update_graph(&mut receiver.graph, &hb, now)?;
         let changed = changed || receiver.inventory != Some(hb.inventory.revision) || new_generation || is_new;
@@ -191,6 +200,7 @@ async fn heartbeat(
         receiver.projection_generation = receiver.projection_generation.checked_add(1)
             .ok_or_else(|| ApiError::conflict("Inventory generation exhausted"))?;
         project_inventory(&mut tx, &hb, &receiver).await?;
+        observe_drive_removals(&mut tx, &hb, &receiver.graph, &prior_devices, now).await?;
         receiver.inventory_updated_at = Some(now);
     }
     let graph_known = receiver.inventory == Some(hb.inventory.revision);
@@ -326,6 +336,48 @@ fn update_graph(graph: &mut Graph, hb: &Heartbeat, now: i64) -> ApiResult<bool> 
         return Err(invalid("A node can have only one host resource"));
     }
     Ok(changed)
+}
+
+async fn observe_drive_removals(
+    tx: &mut Transaction<'_, Sqlite>,
+    hb: &Heartbeat,
+    graph: &Graph,
+    prior_devices: &[Resource],
+    now: i64,
+) -> ApiResult<()> {
+    for resource in prior_devices {
+        if graph.resources.contains_key(&resource.resource_id) { continue; }
+        let Some(removal) = hb.tombstones.iter().find(|t|
+            t.entity_type == "resource" && t.entity_id == resource.resource_id
+        ) else { continue; };
+        let id = object_id(&hb.node_id, resource)?;
+        crate::attention::observe_condition(tx, &crate::attention::Condition {
+            key: format!("drive_removal:{}:{id}", hb.node_id),
+            kind: "drive_removal".into(), node_id: hb.node_id.clone(), object_id: Some(id),
+            status: "open".into(), severity: "warning".into(), observation_state: "ok".into(),
+            summary: "Physical drive removed from this host; administrator review required".into(),
+            evidence: json!({"resource_id":resource.resource_id,"boot_id":hb.boot_id,
+                "device":resource.attributes,"removal":removal,"received_at":store::timestamp(now),
+                "reason":"explicit_physical_device_removal"}),
+        }, now).await?;
+    }
+    // Only an accepted explicit upsert can establish that the same resource
+    // identity is present again; it is not proof of hardware health.
+    for resource in &hb.resources {
+        if resource.resource_type != "physical_device"
+            || !graph.resources.contains_key(&resource.resource_id)
+            || prior_devices.iter().any(|old| old.resource_id == resource.resource_id) { continue; }
+        let id = object_id(&hb.node_id, resource)?;
+        crate::attention::observe_condition(tx, &crate::attention::Condition {
+            key: format!("drive_removal:{}:{id}", hb.node_id),
+            kind: "drive_removal".into(), node_id: hb.node_id.clone(), object_id: Some(id),
+            status: "resolved".into(), severity: "warning".into(), observation_state: "ok".into(),
+            summary: "Physical drive resource observed again".into(),
+            evidence: json!({"resource_id":resource.resource_id,"boot_id":hb.boot_id,
+                "observed_at":resource.observed_at,"received_at":store::timestamp(now)}),
+        }, now).await?;
+    }
+    Ok(())
 }
 
 fn object_id(node: &str, resource: &Resource) -> ApiResult<String> {
