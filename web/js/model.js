@@ -103,6 +103,12 @@ export function clusterVM(snapshot, stale = false) {
     localFree: unavailable ? 'Unknown' : bytes(measured(cluster.capacity.local.free_bytes)),
     localTotal: unavailable ? 'Unknown' : bytes(measured(cluster.capacity.local.capacity_bytes)),
     sharedTotal: unavailable ? 'Unknown' : bytes(measured(cluster.capacity.shared.capacity_bytes)),
+    sharedMounts: (cluster?.capacity?.shared_mounts || []).map(m => ({...m,
+      totalLabel: unavailable ? 'Unknown' : capacityValue(m.capacity?.capacity_bytes),
+      usedLabel: unavailable ? 'Unknown' : capacityValue(m.capacity?.used_bytes),
+      freeLabel: unavailable ? 'Unknown' : capacityValue(m.capacity?.free_bytes),
+      hostLabel: nodes.find(n => n.id === m.node_id)?.name || m.node_id
+    })),
     totalRead: unavailable ? 'Unknown' : rateLabel(cluster.throughput.read_bytes_per_second),
     totalWrite: unavailable ? 'Unknown' : rateLabel(cluster.throughput.write_bytes_per_second),
     readCoverage: unavailable ? 'No current coverage' : clusterRateCoverage(cluster.throughput.read_bytes_per_second, snapshot.nodes || [], 'read_bytes_per_second'),

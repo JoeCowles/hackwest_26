@@ -850,3 +850,17 @@ fn mount_identity_parser_rejects_races_and_keeps_authoritative_snapshot_parent()
             .is_err()
     );
 }
+#[test]
+fn nfs_mounts_report_server_export_and_cached_capacity() {
+    let mut input: Value = serde_json::from_slice(include_bytes!("fixtures/mounts.json")).unwrap();
+    input["mounts"][0]["filesystem_type"] = json!("nfs");
+    input["mounts"][0]["source"] = json!("[::1]:/exports/data");
+    input["mounts"][0]["local"] = json!(false);
+    let result = parse_mounts(&serde_json::to_vec(&input).unwrap(), NODE, BOOT).unwrap();
+    let mount = result.resources.iter().find(|r| r.resource_type == "mount").unwrap();
+    assert_eq!(mount.attributes["nfs_server"], "[::1]");
+    assert_eq!(mount.attributes["nfs_export_path"], "/exports/data");
+    assert_eq!(mount.attributes["configured_source"], "[::1]:/exports/data");
+    assert!(!mount.attributes.contains_key("shared_filesystem_authoritative"));
+    assert_eq!(result.samples[0].collector, "mount.inventory");
+}

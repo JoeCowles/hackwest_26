@@ -28,7 +28,7 @@ smart_seconds = 15
 inventory_reconcile_seconds = 3
 apfs_accounting_seconds = 15
 jitter_percent = 0
-nfs_path_refresh_enabled = false
+nfs_path_refresh_enabled = true
 active_write_probes_enabled = false
 diagnostic_jobs_enabled = false
 

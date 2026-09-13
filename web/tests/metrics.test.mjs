@@ -28,6 +28,24 @@ const snapshot = (nodes = [node()]) => ({ nodes, cluster: {
   throughput: { read_bytes_per_second: nodes.length ? measurement(nodes.length * 1000) : unavailable(), write_bytes_per_second: nodes.length ? measurement(0) : unavailable() }
 } });
 
+test('shared capacity lists every NFS mount without inventing an additive total', () => {
+  const s = snapshot();
+  s.cluster.capacity.shared.capacity_bytes = unavailable();
+  s.cluster.capacity.shared_mounts = ['one', 'two'].map(id => ({
+    object_id: id, node_id: 'one', source: `nas:/exports/${id}`,
+    mount_point: `/Volumes/${id}`, capacity: capacity(), included_in_shared_total: false
+  }));
+  const vm = model.clusterVM(s);
+  assert.equal(vm.sharedMounts.length, 2);
+  assert.equal(vm.sharedMounts[1].source, 'nas:/exports/two');
+  assert.equal(vm.sharedMounts[0].hostLabel, 'One');
+  assert.notEqual(vm.sharedMounts[0].freeLabel, 'Unknown');
+  assert.equal(vm.sharedTotal, 'Unknown');
+  assert.equal(model.clusterVM(s, true).sharedMounts[0].freeLabel, 'Unknown');
+  s.cluster.capacity.shared_mounts[1].capacity.free_bytes = unavailable();
+  assert.equal(model.clusterVM(s).sharedMounts[1].freeLabel, 'Unknown');
+});
+
 test('positive sub-MB traffic stays distinguishable from an idle source', () => {
   for (const value of [0.000001, 1, 1000, 49999]) {
     const label = model.rateLabel(measurement(value));

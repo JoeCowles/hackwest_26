@@ -554,6 +554,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "cider-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "chrono",
+ "clap",
+ "dirs",
+ "dotenvy",
+ "eframe",
+ "fs2",
+ "libc",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "ciderd"
 version = "0.1.0"
 dependencies = [
@@ -2565,38 +2597,6 @@ checksum = "5df339f526ea9a60e371768d50efc2f2508c7203290731565d1f7a6f71d21747"
 dependencies = [
  "libc",
  "libredox",
-]
-
-[[package]]
-name = "cider-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-server",
- "chrono",
- "clap",
- "dirs",
- "dotenvy",
- "eframe",
- "fs2",
- "libc",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sha2",
- "sqlx",
- "subtle",
- "tempfile",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

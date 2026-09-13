@@ -85,10 +85,19 @@ pub fn parse_mounts(bytes: &[u8], node: &str, boot: &str) -> Result<Collected> {
             .get("local")
             .and_then(Value::as_bool)
             .context("missing mount local flag")?;
-        let attrs = crate::model::attrs(
+        let mut attrs = crate::model::attrs(
             json!({"fsid":fsid,"mount_path":path,"source":source,"filesystem_type":filesystem_type,
             "mount_path_hex":raw_path,"source_hex":raw_source,"mount_generation":generation,"local":local,"source_api":"getfsstat-MNT_NOWAIT"}),
         );
+        if filesystem_type == "nfs" {
+            attrs.insert("configured_source".into(), json!(source));
+            if let Some((server, export)) = source.split_once(":/") {
+                if !server.is_empty() {
+                    attrs.insert("nfs_server".into(), json!(server));
+                    attrs.insert("nfs_export_path".into(), json!(format!("/{export}")));
+                }
+            }
+        }
         result.resource(Resource::new(id.clone(), "mount", attrs))?;
         let mut metrics = vec![Metric::reading(
             "storage.mount.read_only",

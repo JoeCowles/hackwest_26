@@ -1025,6 +1025,16 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
         }
         unresolved += 1;
     }
+    let shared_mounts: Vec<_> = objects.iter().filter(|o| o["active"] == true && o["kind"] == "nfs_mount").map(|object| {
+        let p = &object["properties"];
+        json!({"object_id":object["object_id"],"node_id":object["node_id"],
+            "source":p.get("configured_source").or_else(||p.get("source")),
+            "server":p["nfs_server"],"export_path":p["nfs_export_path"],"mount_point":p["mount_point"],
+            "capacity":filesystem_capacity(object),
+            "included_in_shared_total":p["shared_filesystem_authoritative"] == true
+                && p["shared_filesystem_id"].as_str().is_some_and(|id|!id.is_empty())
+                && online_ids.contains(object["node_id"].as_str().unwrap_or(""))})
+    }).collect();
     let mut counts = json!({"total":nodes.len(),"online":0,"degraded":0,"offline":0,"unknown":0});
     for node in &nodes { let key = node["availability"].as_str().unwrap_or("unknown"); counts[key] = json!(counts[key].as_u64().unwrap_or(0)+1); }
     let local_cap = capacity(&local);
@@ -1043,7 +1053,7 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
     crate::reliability_view::apply_health(&mut overall_health,&current_reliability);
     finish_assessment(&mut overall_health);
     let cluster = json!({"cluster_id":cluster_id,"node_counts":counts,"health":overall_health,"capacity":{"local":local_cap,"shared":capacity(&shared.into_values().collect::<Vec<_>>()),
-        "unresolved_shared_mounts":unresolved,"contributing_node_ids":contributors,"excluded_node_ids":excluded},
+        "shared_mounts":shared_mounts,"unresolved_shared_mounts":unresolved,"contributing_node_ids":contributors,"excluded_node_ids":excluded},
         "throughput":{"read_bytes_per_second":aggregate(nodes.iter().map(|n|n["read_bytes_per_second"].clone()).collect(),"bytes/second",false),"write_bytes_per_second":aggregate(nodes.iter().map(|n|n["write_bytes_per_second"].clone()).collect(),"bytes/second",false)},
         "active_alert_counts":{"warning":null,"critical":null},"alerts_available":false,"observed_node_count":observed_node_count,"expected_node_count":nodes.len()});
     let filesystems = objects.iter().filter(|o| o["active"] == true && matches!(o["kind"].as_str(), Some("apfs_volume"|"mount"|"nfs_mount"))).map(|object| {

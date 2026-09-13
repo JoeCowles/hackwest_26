@@ -11,6 +11,29 @@ const ADMIN: &str = "compatibility-test-admin";
 const LARGE: u128 = u64::MAX as u128 + 1000;
 
 #[tokio::test]
+async fn shared_capacity_lists_two_unidentified_nfs_mounts_without_double_counting() {
+    let h = Harness::new().await;
+    let mut hb = h.heartbeat();
+    hb["collections"] = json!([]);
+    hb["collector_states"] = json!([]);
+    hb["resources"] = json!([1,2].into_iter().map(|n| json!({
+        "resource_id":format!("nfs-{n}"),"resource_type":"mount","revision":"1",
+        "observed_at":Utc::now().to_rfc3339(),"identity_confidence":"host_local",
+        "attributes":{"filesystem_type":"nfs","local":false,"nfs_server":"nas",
+            "nfs_export_path":format!("/export/{n}"),"configured_source":format!("nas:/export/{n}"),
+            "mount_path":format!("/Volumes/share{n}")}
+    })).collect::<Vec<_>>());
+    assert_eq!(h.send(&hb).await.0, 200);
+    let (status, body) = request(&h.app, "GET", "/api/v1/cluster", ADMIN, Value::Null).await;
+    assert_eq!(status, 200);
+    let mounts = body["data"]["capacity"]["shared_mounts"].as_array().unwrap();
+    assert_eq!(mounts.len(), 2);
+    assert!(mounts.iter().all(|m|m["server"] == "nas" && m["included_in_shared_total"] == false));
+    assert!(mounts.iter().any(|m|m["source"] == "nas:/export/2"));
+    assert_eq!(body["data"]["capacity"]["shared"]["capacity_bytes"]["state"], "unknown");
+}
+
+#[tokio::test]
 async fn native_user_quota_is_separate_from_volume_capacity_and_keeps_exact_usage() {
     let h=Harness::new().await;
     let mut hb=h.heartbeat();
