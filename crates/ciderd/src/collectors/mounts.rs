@@ -146,3 +146,78 @@ pub fn parse_capacity(bytes: &[u8], resource_id: &str) -> Result<Collected> {
     );
     Ok(result)
 }
+
+/// Enrich an existing mount only after the worker validated its exact incarnation.
+pub fn parse_mount_identity(bytes: &[u8], mount: &Resource) -> Result<Collected> {
+    let mut value = json(bytes)?;
+    ensure!(
+        mount.resource_type == "mount" && mount.attributes.get("local") == Some(&Value::Bool(true)),
+        "identity lookup is local mount only"
+    );
+    ensure!(
+        value.get("fsid") == mount.attributes.get("fsid")
+            && value.get("source") == mount.attributes.get("source"),
+        "mount replaced during identity lookup"
+    );
+    let state = text(&value, "state")?.to_owned();
+    ensure!(
+        ["ok", "unavailable"].contains(&state.as_str()),
+        "invalid identity state"
+    );
+    for key in [
+        "volume_uuid",
+        "media_registry_id",
+        "parent_volume_uuid",
+        "parent_media_registry_id",
+    ] {
+        if let Some(v) = value.get(key).filter(|v| !v.is_null()) {
+            let s = v.as_str().context("invalid identity string")?;
+            ensure!(
+                !s.is_empty() && s.len() <= 128 && !s.contains('\0'),
+                "invalid identity length"
+            );
+            if key.ends_with("registry_id") {
+                ensure!(uint(v)? <= u64::MAX as u128, "invalid registry ID");
+            }
+        }
+    }
+    for key in ["media_bsd_name", "parent_media_bsd_name"] {
+        if let Some(v) = value.get(key).filter(|v| !v.is_null()) {
+            ensure!(
+                v.as_str().is_some_and(crate::platform::valid_media_name),
+                "invalid identity media name"
+            );
+        }
+    }
+    if value
+        .get("parent_volume_uuid")
+        .is_some_and(Value::is_string)
+    {
+        ensure!(
+            value
+                .get("parent_media_bsd_name")
+                .is_some_and(Value::is_string)
+                && value
+                    .get("parent_media_registry_id")
+                    .is_some_and(Value::is_string),
+            "incomplete snapshot parent evidence"
+        );
+    }
+    value["mount_generation"] = mount
+        .attributes
+        .get("mount_generation")
+        .cloned()
+        .context("missing mount generation")?;
+    let mut resource = mount.clone();
+    resource.attributes.insert("mount_identity".into(), value);
+    let mut result = Collected::complete();
+    result.resource(resource)?;
+    result.sample(
+        &mount.resource_id,
+        "mount.identity",
+        vec![],
+        if state == "ok" { "ok" } else { "failed" },
+        "DiskArbitration-IOKit-v1",
+    );
+    Ok(result)
+}

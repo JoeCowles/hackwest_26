@@ -330,7 +330,7 @@ pub async fn snapshot_with_worker(
     let info = platform::system_info()?;
     let session = uuid::Uuid::new_v4().to_string();
     let node = format!("preview-{}", uuid::Uuid::new_v4());
-    let envelope = initial_heartbeat(
+    let mut envelope = initial_heartbeat(
         &node,
         0,
         &session,
@@ -340,6 +340,12 @@ pub async fn snapshot_with_worker(
         &info.target,
         config.heartbeat.interval_seconds,
     );
+    envelope.resources[0]
+        .attributes
+        .extend(crate::hardware::hardware_attributes(
+            info.model_identifier,
+            &envelope.created_at,
+        ));
     let engine = Engine::start(&config, envelope, worker, false).await?;
     tokio::time::sleep(window).await;
     let result = engine.prepared(1, config.heartbeat.maximum_request_bytes);
@@ -408,7 +414,7 @@ pub async fn run_with_worker(
     let authorization = read_credential(&config.heartbeat.bearer_token_file)?;
     let sender = Sender::new(config.heartbeat.clone())?;
     let session = Session::open(&config.node.identity_file, &config.node.state_directory)?;
-    let envelope = initial_heartbeat(
+    let mut envelope = initial_heartbeat(
         &session.node_id,
         session.generation,
         &session.session_id,
@@ -418,6 +424,12 @@ pub async fn run_with_worker(
         &info.target,
         config.heartbeat.interval_seconds,
     );
+    envelope.resources[0]
+        .attributes
+        .extend(crate::hardware::hardware_attributes(
+            info.model_identifier,
+            &envelope.created_at,
+        ));
     let engine = Engine::start(&config, envelope, worker, true).await?;
     let (credentials, credential_rx) = watch::channel(authorization);
     let rotation = tokio::spawn(rotate_credentials(

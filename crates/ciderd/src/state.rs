@@ -21,6 +21,8 @@ pub struct Metadata {
     #[serde(default)]
     pub group_owners: BTreeMap<String, String>,
     pub generations: BTreeMap<String, String>,
+    #[serde(default)]
+    pub topology_evidence: BTreeMap<String, crate::topology::Evidence>,
 }
 
 #[derive(Clone, Default)]
@@ -407,6 +409,27 @@ impl State {
             .checked_add(1)
             .context("inventory revision exhausted")?;
         for mut resource in resources {
+            // Source enumeration cannot erase independent, dated enrichments for
+            // the same incarnation. A new boot/session never inherits them.
+            if !group.starts_with("derived.storage") && !group.starts_with("mount.identity:") {
+                if let Some(old) = metadata.resources.get(&resource.resource_id) {
+                    if resource.attributes.get("observed_agent_session")
+                        == old.attributes.get("observed_agent_session")
+                        && resource.attributes.get("mount_generation")
+                            == old.attributes.get("mount_generation")
+                    {
+                        for key in [
+                            "association_state",
+                            "association_reason_codes",
+                            "mount_identity",
+                        ] {
+                            if let Some(value) = old.attributes.get(key) {
+                                resource.attributes.insert(key.into(), value.clone());
+                            }
+                        }
+                    }
+                }
+            }
             resource.validate()?;
             ensure!(
                 ids.insert(resource.resource_id.clone()),
@@ -524,6 +547,9 @@ impl State {
         metadata
             .generations
             .retain(|id, _| metadata.resources.contains_key(id));
+        metadata
+            .topology_evidence
+            .retain(|id, _| metadata.resources.contains_key(id));
         validate_metadata(&metadata)?;
         if metadata != self.metadata {
             self.metadata = metadata;
@@ -534,6 +560,105 @@ impl State {
                 .collector_states
                 .retain(|scope| self.metadata.resources.contains_key(&scope.resource_id));
             self.prune();
+        }
+        Ok(())
+    }
+
+    /// Accept source context independently of derived annotations and revisions.
+    pub(crate) fn source_evidence(
+        &mut self,
+        group: &str,
+        ids: &[String],
+        observed_at: &str,
+        success: bool,
+    ) {
+        let previous = self.metadata.topology_evidence.clone();
+        if success {
+            for id in ids {
+                if let Some(r) = self.metadata.resources.get(id) {
+                    let mapping_stale = r
+                        .attributes
+                        .get("media_mapping_state")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("stale");
+                    let original_time = if mapping_stale {
+                        self.metadata
+                            .topology_evidence
+                            .get(id)
+                            .map(|e| e.observed_at.clone())
+                            .unwrap_or_else(|| observed_at.into())
+                    } else {
+                        observed_at.into()
+                    };
+                    self.metadata.topology_evidence.insert(
+                        id.clone(),
+                        crate::topology::Evidence {
+                            node_id: self.envelope.node_id.clone(),
+                            boot_id: self.envelope.boot_id.clone(),
+                            agent_session_id: self.envelope.agent_session_id.clone(),
+                            source_generation: r
+                                .attributes
+                                .get("source_generation")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("unknown")
+                                .into(),
+                            observed_at: original_time,
+                            state: if mapping_stale { "stale" } else { "ok" }.into(),
+                        },
+                    );
+                }
+            }
+        } else if let Some(members) = self.metadata.groups.get(group) {
+            for id in members {
+                if let Some(e) = self.metadata.topology_evidence.get_mut(id) {
+                    e.state = "stale".into();
+                }
+            }
+        }
+        if validate_metadata(&self.metadata).is_err() {
+            self.metadata.topology_evidence = previous;
+            self.event("topology","Source context exceeded validation limits; unconfirmed evidence cannot authorize associations.");
+        }
+    }
+
+    pub(crate) fn refresh_topology(&mut self) -> Result<()> {
+        let result = crate::topology::reconcile(&crate::topology::TopologyInput {
+            node_id: self.envelope.node_id.clone(),
+            boot_id: self.envelope.boot_id.clone(),
+            agent_session_id: self.envelope.agent_session_id.clone(),
+            resources: self.metadata.resources.values().cloned().collect(),
+            evidence: self.metadata.topology_evidence.clone(),
+        });
+        self.reconcile("derived.storage", vec![], result.relationships, true)?;
+        // Annotate all existing owners in one bounded transaction, without adding
+        // resource IDs to this relationship-only group's ownership set.
+        let mut metadata = self.metadata.clone();
+        let revision = self
+            .envelope
+            .inventory
+            .revision
+            .get()
+            .checked_add(1)
+            .context("inventory revision exhausted")?;
+        for (id, status) in result.associations {
+            if let Some(resource) = metadata.resources.get_mut(&id) {
+                let before = resource.attributes.clone();
+                resource
+                    .attributes
+                    .insert("association_state".into(), status.state.into());
+                resource.attributes.insert(
+                    "association_reason_codes".into(),
+                    serde_json::json!(status.reason_codes),
+                );
+                if before != resource.attributes {
+                    resource.revision = revision.into();
+                }
+            }
+        }
+        validate_metadata(&metadata)?;
+        if metadata != self.metadata {
+            self.metadata = metadata;
+            self.envelope.inventory.revision = revision.into();
         }
         Ok(())
     }
@@ -695,6 +820,30 @@ fn validate_metadata(metadata: &Metadata) -> Result<()> {
         serde_json::to_vec(metadata)?.len() <= MAX_METADATA_BYTES,
         "metadata byte limit exceeded; previous inventory retained"
     );
+    ensure!(
+        metadata.topology_evidence.len() <= 4096,
+        "too many topology evidence records"
+    );
+    for (id, e) in &metadata.topology_evidence {
+        ensure!(
+            metadata.resources.contains_key(id),
+            "topology evidence endpoint missing"
+        );
+        for value in [
+            &e.node_id,
+            &e.boot_id,
+            &e.agent_session_id,
+            &e.source_generation,
+        ] {
+            check_id(value)?;
+        }
+        ensure!(e.observed_at.len() <= 64, "invalid evidence time length");
+        chrono::DateTime::parse_from_rfc3339(&e.observed_at).context("invalid evidence time")?;
+        ensure!(
+            ["ok", "stale"].contains(&e.state.as_str()),
+            "invalid topology evidence state"
+        );
+    }
     for (id, resource) in &metadata.resources {
         resource.validate()?;
         ensure!(

@@ -23,6 +23,12 @@
 .host-link:hover { text-decoration: underline; }
 .empty-note { padding: 16px 0; color: rgba(29,31,32,.6); line-height: 1.7; }
 .live-chart svg { display: block; width: 100%; height: 160px; background: repeating-linear-gradient(to top, transparent 0 39px, rgba(29,31,32,.06) 39px 40px); margin-bottom: 12px; }
+.chart-plot { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 12px; margin-bottom: 12px; }
+.chart-y-axis { display: flex; flex-direction: column; justify-content: space-between; height: 160px; text-align: right; white-space: nowrap; }
+.chart-body { min-width: 0; }
+.chart-x-axis { display: flex; justify-content: space-between; gap: 12px; }
+.chart-x-axis span:last-child { text-align: right; }
+.chart-source-times { margin-top: 8px; }
 .host-summary { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .inventory-object { border-top: 1px solid var(--orchard-border); padding: 14px 0; }
 .inventory-object summary { cursor: pointer; overflow-wrap: anywhere; }
@@ -30,3 +36,37 @@
 .sidebar nav { display: flex; flex-direction: column; }
 @media(max-width:1000px) { .live-split { grid-template-columns: 1fr; } .topbar { flex-wrap: wrap; } }
 @media(max-width:600px) { .connect-fields { flex-direction: column; } .live-kpis { grid-template-columns: 1fr; } .live-split .stage { min-height: 330px; } .counts { flex-wrap: wrap; } .live-table { min-width: 600px; } .connect-panel h2 { font-size: 30px; } }
+
+/* Keep navigation compact after the base stylesheet's mobile layout applies. */
+@media(max-width:860px) { .sidebar nav { flex-direction: row; flex-wrap: wrap; } }
+.note, .empty-note, .live-table th { color: rgba(29,31,32,.7); }
+
+.inventory-properties { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 10px 18px; font-size: 12px; }
+.inventory-properties dt { color: rgba(29,31,32,.7); }
+.inventory-properties dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+
+.page-controls { margin-bottom: 16px; }
+.page-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.btn:disabled { cursor: default; opacity: .45; }
+.btn:disabled:hover { background: transparent; }
+
+/* Canonical storage uses one row per stable object. References remain links. */
+.storage-section + .storage-section { margin-top: 26px; }
+.storage-section h4 { font: 600 22px 'Barlow Condensed', sans-serif; margin: 8px 0 14px; }
+.storage-entry { border-top: 1px solid var(--orchard-border); padding: 12px 0; overflow-wrap: anywhere; scroll-margin-top: 20px; }
+.storage-entry-title { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.storage-entry a, .storage-view a { color: var(--orchard-blue); }
+.storage-entry-title strong { font: 600 19px 'Barlow Condensed', sans-serif; }
+.storage-entry a[aria-current] { text-decoration-thickness: 3px; }
+.storage-children { margin: 10px 0 0 16px; padding-left: 14px; border-left: 2px solid rgba(89,128,166,.25); }
+.storage-children.storage-flat { margin-left: 0; padding-left: 0; border: 0; }
+.storage-raw { margin: 10px 0; font-size: 12px; }
+.storage-raw summary, .storage-view details > summary { cursor: pointer; }
+.storage-references { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.storage-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; padding: 12px; background: rgba(89,128,166,.06); font-size: 11px; }
+.storage-view summary:focus-visible, .storage-view a:focus-visible, .rack-controls button:focus-visible { outline: 2px solid var(--orchard-blue); outline-offset: 3px; }
+.disk-chart { display: block; width: 100%; height: 160px; background: repeating-linear-gradient(to top,transparent 0 39px,rgba(29,31,32,.06) 39px 40px); }
+.rack-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 12px; border: 1px solid var(--orchard-border); }
+.rack-panel { min-width: 0; }
+@media(max-width:600px) { .storage-children { margin-left: 6px; padding-left: 8px; } .storage-entry-title { gap: 4px 8px; } }
+.storage-capacity dd { font-weight: 500; margin-bottom: 4px; }

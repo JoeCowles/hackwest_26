@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>media_mapping_state</key>
+		<string>ok</string>
+		<key>registry_id</key>
+		<string>1234</string>
+		<key>statistics</key>
+		<dict>
+			<key>Bytes (Read)</key>
+			<string>18446744073709551615</string>
+			<key>Bytes (Write)</key>
+			<string>100</string>
+			<key>Operations (Read)</key>
+			<string>3</string>
+			<key>Total Time (Write)</key>
+			<string>700</string>
+		</dict>
+		<key>whole_media_candidates</key>
+		<array>
+			<dict>
+				<key>bsd_name</key>
+				<string>disk0</string>
+				<key>registry_entry_id</key>
+				<string>42</string>
+				<key>whole</key>
+				<true/>
+			</dict>
+			<dict>
+				<key>bsd_name</key>
+				<string>disk0s2</string>
+				<key>registry_entry_id</key>
+				<string>43</string>
+				<key>whole</key>
+				<false/>
+			</dict>
+		</array>
+	</dict>
+</array>
+</plist>

@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 const READ_ROUTES: &[&str] = &[
     "/api/v1/cluster", "/api/v1/nodes", "/api/v1/nodes/{node_id}",
-    "/api/v1/nodes/{node_id}/inventory", "/api/v1/objects/{object_id}",
+    "/api/v1/nodes/{node_id}/inventory", "/api/v1/nodes/{node_id}/disks", "/api/v1/objects/{object_id}",
     "/api/v1/filesystems", "/api/v1/events", "/api/v1/capabilities",
 ];
 const DIMENSIONS: &[&str] = &["availability", "capacity", "performance", "media_health", "filesystem_integrity", "security_activity", "recovery_readiness", "telemetry_freshness"];
@@ -25,11 +25,11 @@ struct ReadState {
 #[derive(Clone)]
 struct Page {
     owner: String, path: String, query: Parameters,
-    expires: i64, time: i64, change: String, values: Arc<Vec<Value>>, bytes: usize,
+    expires: i64, time: i64, change: String, values: Arc<Vec<Value>>, bytes: usize, metadata: Value,
 }
 struct Snapshot {
     time: i64, change: String, nodes: Vec<Value>, objects: Vec<Value>,
-    filesystems: Vec<Value>, events: Vec<Value>, cluster: Value,
+    filesystems: Vec<Value>, events: Vec<Value>, cluster: Value, disks: BTreeMap<String, crate::disk_view::DiskIndex>,
 }
 
 pub fn write_viewer_file(directory: &FilePath, token: &str) -> anyhow::Result<()> {
@@ -63,16 +63,24 @@ pub fn router(app: AppState) -> Router {
         .route("/index.html", get(index))
         .route("/css/console.css", get(console_css))
         .route("/css/live.css", get(live_css))
+        .route("/css/fonts.css", get(fonts_css))
         .route("/js/{asset}", get(javascript))
 }
 
 async fn index() -> Response { asset("text/html; charset=utf-8", include_str!("../../web/index.html")) }
 async fn console_css() -> Response { asset("text/css; charset=utf-8", include_str!("../../web/css/console.css")) }
 async fn live_css() -> Response { asset("text/css; charset=utf-8", include_str!("../../web/css/live.css")) }
+async fn fonts_css() -> Response { asset("text/css; charset=utf-8", include_str!("../../web/css/fonts.css")) }
 async fn javascript(Path(name): Path<String>) -> Response {
     let body = match name.as_str() {
         "app.js" => include_str!("../../web/js/app.js"),
+        "storage.js" => include_str!("../../web/js/storage.js"),
+        "storage-views.js" => include_str!("../../web/js/storage-views.js"),
+        "rack.js" => include_str!("../../web/js/rack.js"),
         "api.js" => include_str!("../../web/js/api.js"),
+        "session.js" => include_str!("../../web/js/session.js"),
+        "vendor-preact-htm.js" => include_str!("../../web/js/vendor-preact-htm.js"),
+        "vendor-three.js" => include_str!("../../web/js/vendor-three.js"),
         "data.js" => include_str!("../../web/js/data.js"),
         "model.js" => include_str!("../../web/js/model.js"),
         "views.js" => include_str!("../../web/js/views.js"),
@@ -84,7 +92,7 @@ async fn javascript(Path(name): Path<String>) -> Response {
 }
 fn asset(content_type: &'static str, body: &'static str) -> Response {
     let mut response = ([("content-type", content_type), ("cache-control", "no-store"), ("x-content-type-options", "nosniff"), ("referrer-policy", "no-referrer")], body).into_response();
-    response.headers_mut().insert("content-security-policy", HeaderValue::from_static("default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"));
+    response.headers_mut().insert("content-security-policy", HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"));
     response
 }
 
@@ -136,8 +144,10 @@ async fn authorize(state: &ReadState, headers: &HeaderMap) -> ApiResult<String> 
     Ok(hash)
 }
 
-fn response(data: Value, time: i64, change: &str, next: Option<String>, request_id: &str) -> Response {
-    Json(json!({"data":data,"meta":{"api_version":"1","server_time":store::timestamp(time),"request_id":request_id,"snapshot_cursor":change,"next_cursor":next}})).into_response()
+fn response(data: Value, time: i64, change: &str, next: Option<String>, request_id: &str, metadata: &Value) -> Response {
+    let mut meta=json!({"api_version":"1","server_time":store::timestamp(time),"request_id":request_id,"snapshot_cursor":change,"next_cursor":next});
+    if let Some(fields)=metadata.as_object() {meta.as_object_mut().expect("meta object").extend(fields.clone());}
+    Json(json!({"data":data,"meta":meta})).into_response()
 }
 
 async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id: &str) -> ApiResult<Response> {
@@ -153,10 +163,13 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
     let resource = parts.get(2).copied().unwrap_or("");
     let id = parts.get(3).copied();
     if let Some(id) = id { Uuid::parse_str(id).map_err(|_| query_error("id", "Expected a resource UUID"))?; }
-    let inventory = resource == "nodes" && parts.get(4) == Some(&"inventory");
-    let list = inventory || (id.is_none() && matches!(resource, "nodes" | "filesystems" | "events"));
+    let subresource = parts.get(4).copied();
+    let inventory = resource == "nodes" && subresource == Some("inventory");
+    let disks = resource == "nodes" && subresource == Some("disks");
+    let list = inventory || disks || (id.is_none() && matches!(resource, "nodes" | "filesystems" | "events"));
     let mut allowed = if list { vec!["limit", "cursor"] } else { vec![] };
-    if inventory { allowed.extend(["generation", "kind"]); }
+    if inventory { allowed.extend(["generation", "kind", "disk_id"]); }
+    else if disks { allowed.push("generation"); }
     else if resource == "nodes" && list { allowed.extend(["availability", "health", "q"]); }
     else if resource == "filesystems" { allowed.extend(["node_id", "classification", "filesystem_type", "health"]); }
     else if resource == "events" { allowed.extend(["node_id", "object_id", "category", "severity", "from", "to"]); }
@@ -170,7 +183,8 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
     for key in ["q", "filesystem_type"] {
         if query.get(key).is_some_and(|v| v.chars().count() > 128) { return Err(query_error(key, "Maximum length is 128 characters")); }
     }
-    for key in ["node_id", "object_id"] {
+    if query.contains_key("disk_id") && query.contains_key("kind") { return Err(query_error("disk_id/kind", "Disk traversal cannot be combined with kind filtering")); }
+    for key in ["node_id", "object_id", "disk_id"] {
         if let Some(id) = query.get(key) { Uuid::parse_str(id).map_err(|_| query_error(key, "Expected a resource UUID"))?; }
     }
     let limit = match query.get("limit") {
@@ -181,16 +195,21 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         return page(state, path, &query, &owner, &cursor, limit, request_id);
     }
     let snapshot = snapshot(&state.app, resource == "events", &query).await?;
-    let data = match (resource, id, inventory) {
+    let metadata = if inventory || disks {
+        let node=snapshot.nodes.iter().find(|n|n["node_id"]==id.unwrap_or("")).ok_or_else(not_found)?;
+        let index=&snapshot.disks[id.unwrap_or("")];
+        json!({"node_id":node["node_id"],"boot_id":node["boot_id"],"agent_session_id":node["agent_session_id"],"inventory_generation":node["inventory_generation"],"topology_revision":index.topology_revision,"disk_inventory":index.disk_inventory})
+    } else {json!({})};
+    let data = match (resource, id, subresource) {
         ("cluster", None, _) => snapshot.cluster.clone(),
         ("capabilities", None, _) => json!({
             "api_version":"1","service_version":env!("CARGO_PKG_VERSION"),"heartbeat_interval_seconds":5,
             "availability_thresholds_seconds":{"degraded":30,"offline":90},"poll_interval_seconds":5,"hidden_poll_interval_seconds":30,
-            "implemented_read_routes":READ_ROUTES,"features":{"current_inventory":true,"historical_inventory":false,"events":true,"alerts":false,"sse":false,"metric_history":false,"prometheus":false,"openapi":false},
+            "implemented_read_routes":READ_ROUTES,"features":{"current_inventory":true,"physical_disks":true,"typed_storage_topology":true,"hardware_models":true,"historical_inventory":false,"events":true,"alerts":false,"sse":false,"metric_history":false,"prometheus":false,"openapi":false},
             "viewer_credential_expires_at":store::timestamp(state.app.viewer_expires_at),"viewer_scope":"telemetry:read","browser_transport":"same_origin",
             "limits":{"default_page_size":100,"maximum_page_size":500,"cursor_ttl_seconds":300,"read_requests_per_minute":120,"read_burst":20}
         }),
-        ("nodes", Some(id), true) => {
+        ("nodes", Some(id), Some("inventory" | "disks")) => {
             let node = snapshot.nodes.iter().find(|n| n["node_id"] == id).ok_or_else(not_found)?;
             if let Some(generation) = query.get("generation") {
                 let parsed = generation.parse::<u64>().map_err(|_| query_error("generation", "Expected a decimal generation"))?;
@@ -198,9 +217,14 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
                     return Err(query_error("generation", "This release exposes current inventory only"));
                 }
             }
-            Value::Array(snapshot.objects.iter().filter(|o| o["node_id"] == id && o["active"] == true && matches_filter(o, "kind", &query)).cloned().collect())
+            let index=&snapshot.disks[id];
+            if disks {Value::Array(index.disks.clone())} else {
+                if let Some(disk)=query.get("disk_id") {if !index.disks.iter().any(|d|d["object_id"]==*disk) {return Err(not_found());}}
+                Value::Array(snapshot.objects.iter().filter(|o| o["node_id"] == id && o["active"] == true && matches_filter(o, "kind", &query)
+                    && query.get("disk_id").is_none_or(|disk|o["object_id"]==*disk || o["physical_disk_ids"].as_array().is_some_and(|ids|ids.iter().any(|v|v==disk)))).cloned().collect())
+            }
         },
-        ("nodes", Some(id), false) => snapshot.nodes.iter().find(|n| n["node_id"] == id).cloned().ok_or_else(not_found)?,
+        ("nodes", Some(id), None) => snapshot.nodes.iter().find(|n| n["node_id"] == id).cloned().ok_or_else(not_found)?,
         ("nodes", None, _) => Value::Array(snapshot.nodes.iter().filter(|n| {
             matches_filter(n, "availability", &query) && health_filter(n, &query)
                 && query.get("q").is_none_or(|q| n["name"].as_str().unwrap_or("").to_lowercase().contains(&q.to_lowercase()))
@@ -212,10 +236,10 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         ("events", None, _) => Value::Array(snapshot.events.clone()),
         _ => return Err(not_found()),
     };
-    if !list { return Ok(response(data, snapshot.time, &snapshot.change, None, request_id)); }
+    if !list { return Ok(response(data, snapshot.time, &snapshot.change, None, request_id, &metadata)); }
     let values = data.as_array().expect("list route");
     let next = if values.len() > limit {
-        let bytes = data.to_string().len();
+        let bytes = data.to_string().len() + metadata.to_string().len();
         let mut pages = state.pages.lock().map_err(|_| unavailable("Pagination unavailable"))?;
         pages.retain(|_, p| p.expires > Utc::now().timestamp_millis());
         if pages.len() >= 128 || bytes + pages.values().map(|p| p.bytes).sum::<usize>() > 32 * 1024 * 1024 {
@@ -223,10 +247,10 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         }
         let key = Uuid::new_v4().to_string();
         let expires = snapshot.time + 300_000;
-        pages.insert(key.clone(), Page { owner, path: path.into(), query, expires, time: snapshot.time, change: snapshot.change.clone(), values: Arc::new(values.clone()), bytes });
+        pages.insert(key.clone(), Page { owner, path: path.into(), query, expires, time: snapshot.time, change: snapshot.change.clone(), values: Arc::new(values.clone()), bytes, metadata: metadata.clone() });
         Some(format!("{key}.{expires}.{limit}"))
     } else { None };
-    Ok(response(json!(values.iter().take(limit).collect::<Vec<_>>()), snapshot.time, &snapshot.change, next, request_id))
+    Ok(response(json!(values.iter().take(limit).collect::<Vec<_>>()), snapshot.time, &snapshot.change, next, request_id, &metadata))
 }
 
 fn validate_enum(query: &Parameters, key: &str, choices: &[&str]) -> ApiResult<()> {
@@ -241,17 +265,19 @@ fn page(state: &ReadState, path: &str, query: &Parameters, owner: &str, cursor: 
     let expires: i64 = parts[1].parse().map_err(|_| query_error("cursor", "Malformed cursor"))?;
     let offset: usize = parts[2].parse().map_err(|_| query_error("cursor", "Malformed cursor"))?;
     if expires <= Utc::now().timestamp_millis() { return Err(ApiError::new(StatusCode::GONE, "cursor_expired", "Start a new traversal")); }
-    let pages = state.pages.lock().map_err(|_| unavailable("Pagination unavailable"))?;
-    let page = pages.get(parts[0]).ok_or_else(|| ApiError::new(StatusCode::GONE, "cursor_expired", "Snapshot is no longer available; start a new traversal"))?;
+    let page = {
+        let pages = state.pages.lock().map_err(|_| unavailable("Pagination unavailable"))?;
+        pages.get(parts[0]).cloned().ok_or_else(|| ApiError::new(StatusCode::GONE, "cursor_expired", "Snapshot is no longer available; start a new traversal"))?
+    };
     if page.path != path || page.query != *query || page.owner != owner || page.expires != expires || offset == 0 || offset >= page.values.len() || offset % limit != 0 {
         return Err(query_error("cursor", "Cursor does not match this traversal"));
     }
     let end = offset.saturating_add(limit).min(page.values.len());
     let next = (end < page.values.len()).then(|| format!("{}.{expires}.{end}", parts[0]));
-    Ok(response(json!(&page.values[offset..end]), page.time, &page.change, next, request_id))
+    Ok(response(json!(&page.values[offset..end]), page.time, &page.change, next, request_id, &page.metadata))
 }
 
-fn unknown(kind: &str, unit: &str) -> Value {
+pub(crate) fn unknown(kind: &str, unit: &str) -> Value {
     json!({"value":null,"kind":kind,"unit":unit,"state":"unknown","source":"server","scope":"object","observed_at":null,"received_at":null,"age_seconds":null,"boot_id":null,"inventory_generation":null})
 }
 fn metric(object: &Value, name: &str, unit: &str) -> Value {
@@ -286,7 +312,7 @@ fn aggregate(values: Vec<Value>, unit: &str, exact: bool) -> Value {
     out["age_seconds"] = json!(valid.iter().filter_map(|m| m["age_seconds"].as_f64()).reduce(f64::max));
     out
 }
-fn capacity(objects: &[&Value]) -> Value {
+pub(crate) fn capacity(objects: &[&Value]) -> Value {
     let mut out = json!({"forecast_full_at":null,"forecast_state":"insufficient_data"});
     for name in ["capacity_bytes", "used_bytes", "free_bytes", "available_bytes"] {
         out[name] = aggregate(objects.iter().map(|o| metric(o, name, "bytes")).collect(), "bytes", true);
@@ -303,6 +329,25 @@ fn capacity(objects: &[&Value]) -> Value {
         }
     }
     out
+}
+fn filesystem_capacity(object: &Value) -> Value {
+    let mut out = capacity(&[object]);
+    // A filesystem row describes one observer, so preserve its non-current
+    // value and source state instead of losing them in a valid-only sum.
+    for name in ["capacity_bytes", "used_bytes", "free_bytes", "available_bytes"] {
+        let measurement = metric(object, name, "bytes");
+        if measurement["state"] != "ok" {
+            out[name] = measurement;
+            out[name]["coverage"] = json!({"observed":0,"expected":1});
+        }
+    }
+    out
+}
+fn node_availability(row: &SqliteRow, now: i64) -> &'static str {
+    let age = row.get::<Option<i64>, _>("last_seen_at").map(|at| (now - at).max(0));
+    if row.get::<Option<i64>, _>("goodbye_at").is_some() || row.get::<Option<i64>, _>("revoked_at").is_some() || age.is_some_and(|age| age >= 90_000) { "offline" }
+    else if age.is_some_and(|age| age >= 30_000) { "degraded" }
+    else if age.is_some() { "online" } else { "unknown" }
 }
 fn health(availability: &str, capacity: &Value) -> Value {
     let mut dimensions = serde_json::Map::new();
@@ -334,7 +379,7 @@ fn from_latest(raw: &Value, now: i64, active: bool, boot: Option<&str>, generati
         .map(|seconds| seconds as f64).unwrap_or_else(|| freshness(sample["name"].as_str().unwrap_or("")) as f64);
     let old_identity = !active || raw["boot_id"].as_str() != boot || raw["inventory_generation"].as_str() != Some(generation);
     let mut state = sample["state"].as_str().unwrap_or("unknown");
-    if old_identity || (state == "ok" && age.is_none_or(|age| age > stale_after)) { state = "stale"; }
+    if state == "ok" && (old_identity || age.is_none_or(|age| age > stale_after)) { state = "stale"; }
     let mut val = sample["value"].clone();
     if sample["kind"] == "counter" || sample["unit"] == "bytes" {
         val = if let Some(n) = val.as_u64() { json!(n.to_string()) }
@@ -347,22 +392,84 @@ fn from_latest(raw: &Value, now: i64, active: bool, boot: Option<&str>, generati
         "boot_id":raw["boot_id"],"inventory_generation":raw["inventory_generation"],"labels":sample["labels"],"ciderd":raw["ciderd"],
         "derived_rate_per_second":if state == "ok" {raw["derived_rate_per_second"].clone()} else {Value::Null},"derivation_state":raw["derivation_state"]})
 }
-fn rate(object: &Value, name: &str) -> Value {
+pub(crate) fn rate(object: &Value, name: &str) -> Value {
     let raw = metric(object, name, "bytes"); let mut out = raw.clone();
     out["kind"] = json!("gauge"); out["unit"] = json!("bytes/second");
     out["value"] = if raw["state"] == "ok" && raw["derivation_state"] == "ok" { raw["derived_rate_per_second"].clone() } else { Value::Null };
     if out["value"].is_null() && out["state"] == "ok" { out["state"] = json!("unknown"); }
     out
 }
+pub(crate) fn select_capacity_observer<'a>(selected: &mut BTreeMap<String, &'a Value>, key: String, object: &'a Value) {
+    fn quality(object: &Value) -> (bool, usize, f64) {
+        let metrics: Vec<_> = ["capacity_bytes", "used_bytes", "free_bytes", "available_bytes"]
+            .into_iter().map(|name| metric(object, name, "bytes")).collect();
+        let complete = integer(&metrics[0]).zip(integer(&metrics[1])).is_some_and(|(total, used)| used <= total);
+        let valid: Vec<_> = metrics.iter().filter(|m| integer(m).is_some()).collect();
+        let age = valid.iter().map(|m| m["age_seconds"].as_f64().unwrap_or(f64::INFINITY)).fold(0.0, f64::max);
+        (complete, valid.len(), age)
+    }
+    selected.entry(key).and_modify(|previous| {
+        let current = quality(object);
+        let old = quality(previous);
+        // Keep one coherent observer; never combine its free/used fields with another's.
+        if (current.0, current.1) > (old.0, old.1) ||
+            ((current.0, current.1) == (old.0, old.1) && current.2 < old.2) {
+            *previous = object;
+        }
+    }).or_insert(object);
+}
+
+fn parents_in(object: &Value, parents: &BTreeSet<String>) -> bool {
+    object["parent_ids"].as_array().is_some_and(|ids| !ids.is_empty() &&
+        ids.iter().all(|id| id.as_str().is_some_and(|id| parents.contains(id))))
+}
+
 fn local_capacity_objects<'a>(objects: &[&'a Value]) -> Vec<&'a Value> {
+    let mut physical: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for object in objects {
+        if let (Some(node), Some(resource_type)) = (object["node_id"].as_str(), object["properties"]["ciderd_resource_type"].as_str()) {
+            // An empty set marks a native node whose physical inventory is unavailable.
+            let devices = physical.entry(node.into()).or_default();
+            if resource_type == "physical_device" && object["properties"]["source"] == "diskutil.list.physical" {
+                if let Some(id) = object["object_id"].as_str() { devices.insert(id.into()); }
+            }
+        }
+    }
+    let mut media = physical.clone();
+    for object in objects {
+        if matches!(object["kind"].as_str(), Some("partition" | "apfs_store")) {
+            if let Some(node) = object["node_id"].as_str() {
+                if physical.get(node).is_some_and(|ids| parents_in(object, ids)) {
+                    if let Some(id) = object["object_id"].as_str() { media.entry(node.into()).or_default().insert(id.into()); }
+                }
+            }
+        }
+    }
+    let mut physical_sources: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for object in objects {
+        if let (Some(node), Some(id), Some(bsd)) = (object["node_id"].as_str(), object["object_id"].as_str(), object["properties"]["bsd_name"].as_str()) {
+            if media.get(node).is_some_and(|ids| ids.contains(id)) {
+                physical_sources.entry(node.into()).or_default().insert(format!("/dev/{bsd}"));
+            }
+        }
+    }
     let mut selected = BTreeMap::new();
     for object in objects {
         let properties = &object["properties"];
-        let key = if object["kind"] == "apfs_container" { Some(object["object_id"].as_str().unwrap_or("").to_owned()) }
-            else if object["kind"] == "mount" && properties["filesystem_type"].as_str().is_some_and(|t| !matches!(t.to_lowercase().as_str(), "apfs" | "nfs" | "nfs4")) {
-                properties["filesystem_id"].as_str().map(|id| format!("{}:{id}", object["node_id"].as_str().unwrap_or("")))
+        let node = object["node_id"].as_str().unwrap_or("");
+        if properties["local"] == false { continue; }
+        // Preserve legacy scope only for legacy nodes. Native nodes require proven
+        // physical backing even while physical inventory is pending or unavailable.
+        let key = if object["kind"] == "apfs_container" {
+            if media.get(node).is_some_and(|ids| !parents_in(object, ids)) { continue; }
+            object["object_id"].as_str().map(str::to_owned)
+        } else if object["kind"] == "mount" && properties["filesystem_type"].as_str().is_some_and(|t| !matches!(t.to_lowercase().as_str(),
+            "apfs" | "nfs" | "nfs4" | "smbfs" | "cifs" | "webdav" | "autofs" | "devfs" | "procfs" | "kernfs" | "fdesc" | "fdescfs" | "tmpfs" | "ramfs" | "synthfs")) {
+                if physical.contains_key(node) && !properties["source"].as_str()
+                    .is_some_and(|source| physical_sources.get(node).is_some_and(|sources| sources.contains(source))) { continue; }
+                properties["filesystem_id"].as_str().map(|id| format!("{node}:{id}"))
             } else { None };
-        if let Some(key) = key { selected.entry(key).or_insert(*object); }
+        if let Some(key) = key { select_capacity_observer(&mut selected, key, object); }
     }
     selected.into_values().collect()
 }
@@ -395,7 +502,9 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
             events.push(event);
         }
     }
-    let inventory_times = sqlx::query("SELECT node_id,MAX(received_at) AS updated FROM inventory_generations GROUP BY node_id").fetch_all(&mut *tx).await?;
+    let inventory_times = sqlx::query("SELECT node_id,MAX(updated) AS updated FROM (SELECT node_id,received_at AS updated FROM inventory_generations UNION ALL SELECT node_id,json_extract(state_json,'$.inventory_updated_at') AS updated FROM cider_nodes) WHERE updated IS NOT NULL GROUP BY node_id").fetch_all(&mut *tx).await?;
+    let native_rows=sqlx::query("SELECT node_id,json_extract(state_json,'$.generation') AS agent_generation,json_extract(state_json,'$.session') AS agent_session_id FROM cider_nodes").fetch_all(&mut *tx).await?;
+    let native:BTreeMap<String,Value>=native_rows.iter().map(|r|(r.get("node_id"),json!({"agent_generation":r.get::<String,_>("agent_generation"),"agent_session_id":r.get::<String,_>("agent_session_id")}))).collect();
     tx.commit().await?;
     let metadata: HashMap<String, (Option<String>, String)> = node_rows.iter().map(|r| (r.get("node_id"), (r.get("boot_id"), r.get::<i64, _>("inventory_generation").to_string()))).collect();
     let mut by_object: HashMap<String, Vec<Value>> = HashMap::new();
@@ -428,13 +537,12 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
         let root = owned.iter().find(|o| o["kind"] == "node").copied();
         let agent = value(&row, "agent_json")?; let last_seen: Option<i64> = row.get("last_seen_at");
         let age = last_seen.map(|at| (now - at).max(0) as f64 / 1000.0);
-        let availability = if row.get::<Option<i64>, _>("goodbye_at").is_some() || row.get::<Option<i64>, _>("revoked_at").is_some() || age.is_some_and(|a| a >= 90.0) { "offline" }
-            else if age.is_some_and(|a| a >= 30.0) { "degraded" } else if age.is_some() { "online" } else { "unknown" };
+        let availability = node_availability(&row, now);
         let cap = capacity(&local_capacity_objects(&owned));
         let temperatures: Vec<Value> = devices.iter().map(|o| metric(o,"device_temperature_celsius","celsius")).collect();
         let temperature = temperatures.into_iter().filter(|m| number(m).is_some()).max_by(|a,b| number(a).unwrap_or_default().total_cmp(&number(b).unwrap_or_default())).unwrap_or_else(|| unknown("gauge","celsius"));
         let mut node = json!({"node_id":id,"name":row.get::<String,_>("name"),"model":root.map(|o|o["properties"]["model"].clone()).unwrap_or(Value::Null),
-            "os_version":root.map(|o|metric(o,"node_os_version","string")["value"].clone()).unwrap_or(Value::Null),"agent_version":agent["version"],
+            "os_version":agent.get("os_version").cloned().or_else(||root.map(|o|metric(o,"node_os_version","string")["value"].clone())).unwrap_or(Value::Null),"agent_version":agent["version"],
             "inventory_generation":row.get::<i64,_>("inventory_generation").to_string(),"last_seen_at":last_seen.map(store::timestamp),"last_seen_age_seconds":age,"heartbeat_interval_seconds":5,
             "availability":availability,"health":health(availability,&cap),"active_alert_count":null,"alerts_available":false,"capacity":cap,
             "read_bytes_per_second":aggregate(io_devices.iter().map(|o|rate(o,"device_read_bytes_total")).collect(),"bytes/second",false),
@@ -442,20 +550,52 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
             "capabilities":["inventory","telemetry"],"enrolled_at":store::timestamp(row.get("enrolled_at")),
             "inventory_updated_at":inventory_times.iter().find(|r|r.get::<String,_>("node_id")==id).map(|r|store::timestamp(r.get("updated"))),
             "inventory_url":format!("/api/v1/nodes/{id}/inventory")});
+        node["boot_id"]=json!(row.get::<Option<String>,_>("boot_id"));
+        node["agent_generation"]=native.get(&id).map(|v|v["agent_generation"].clone()).unwrap_or(Value::Null);
+        node["agent_session_id"]=native.get(&id).map(|v|v["agent_session_id"].clone()).unwrap_or(Value::Null);
+        node["hardware"]=crate::hardware::hardware_view(&root.map(|o|o["properties"].clone()).unwrap_or(Value::Null), &root.map(|o|o["properties"]["ciderd_acquisition"].clone()).unwrap_or(Value::Null), node["boot_id"].as_str());
         if availability != "online" {
-            for key in ["read_bytes_per_second", "write_bytes_per_second", "temperature_celsius"] { node[key]["state"] = json!("stale"); }
-            for key in ["capacity_bytes", "used_bytes", "free_bytes", "available_bytes", "used_ratio"] { node["capacity"][key]["state"] = json!("stale"); }
+            if node["hardware"]["state"]=="ok" {node["hardware"]["state"]=json!("stale");node["hardware"]["reason"]=json!("owner_unavailable");}
+            for key in ["read_bytes_per_second", "write_bytes_per_second", "temperature_celsius"] { if node[key]["state"] == "ok" { node[key]["state"] = json!("stale"); } }
+            for key in ["capacity_bytes", "used_bytes", "free_bytes", "available_bytes", "used_ratio"] { if node["capacity"][key]["state"] == "ok" { node["capacity"][key]["state"] = json!("stale"); } }
         }
         nodes.push(node);
     }
     let online_ids: BTreeSet<_> = nodes.iter().filter(|n| n["availability"] == "online").filter_map(|n| n["node_id"].as_str()).collect();
+    // Node summaries retain otherwise-valid source values with a stale summary
+    // state. Exposed object/filesystem observations then reflect owner liveness;
+    // unavailable owners never contribute to current cluster aggregates.
+    for object in &mut objects {
+        if !online_ids.contains(object["node_id"].as_str().unwrap_or("")) {
+            for measurement in object["latest_metrics"].as_object_mut().expect("metric map").values_mut() {
+                if measurement["state"] == "ok" {
+                    measurement["state"] = json!("stale");
+                    measurement["derived_rate_per_second"] = Value::Null;
+                }
+            }
+            for series in object["latest_metric_series"].as_array_mut().expect("series list") {
+                let measurement = &mut series["measurement"];
+                if measurement["state"] == "ok" {
+                    measurement["state"] = json!("stale");
+                    measurement["derived_rate_per_second"] = Value::Null;
+                }
+            }
+        }
+    }
+    let mut disks=BTreeMap::new();let mut normalized=Vec::new();
+    for node in &nodes {
+        let mut input=node.clone();input["_snapshot_time"]=json!(now);
+        let mut index=crate::disk_view::build_disk_index(&input,&objects.iter().filter(|o|o["node_id"]==node["node_id"]).cloned().collect::<Vec<_>>());
+        normalized.append(&mut index.objects);disks.insert(node["node_id"].as_str().unwrap_or("").to_owned(),index);
+    }
+    objects=normalized;objects.sort_by(|a,b|a["object_id"].as_str().cmp(&b["object_id"].as_str()));
     let active: Vec<_> = objects.iter().filter(|o| o["active"] == true && online_ids.contains(o["node_id"].as_str().unwrap_or(""))).collect();
     let local = local_capacity_objects(&active); let mut shared = BTreeMap::new(); let mut unresolved = 0;
     for object in objects.iter().filter(|o|o["active"] == true && o["kind"] == "nfs_mount") {
         let properties = &object["properties"];
         if properties["shared_filesystem_authoritative"] == true {
             if let Some(id) = properties["shared_filesystem_id"].as_str().filter(|id|!id.is_empty()) {
-                if online_ids.contains(object["node_id"].as_str().unwrap_or("")) { shared.entry(id.to_owned()).or_insert(object); }
+                if online_ids.contains(object["node_id"].as_str().unwrap_or("")) { select_capacity_observer(&mut shared, id.to_owned(), object); }
                 continue;
             }
         }
@@ -476,11 +616,153 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
     let filesystems = objects.iter().filter(|o| o["active"] == true && matches!(o["kind"].as_str(), Some("apfs_volume"|"mount"|"nfs_mount"))).map(|object| {
         let p = &object["properties"];
         let kind = p["filesystem_type"].as_str().unwrap_or(if object["kind"] == "nfs_mount" {"nfs"} else if object["kind"] == "apfs_volume" {"apfs"} else {"unknown"});
-        let classification = if object["kind"] == "nfs_mount" || matches!(kind,"nfs"|"nfs4") {"network"} else if p["removable"] == true {"removable"} else {"local"};
+        let classification = if object["kind"] == "nfs_mount" || matches!(kind.to_ascii_lowercase().as_str(),"nfs"|"nfs4"|"smbfs"|"cifs"|"webdav") {"network"} else if p["removable"] == true {"removable"} else {"local"};
         json!({"object_id":object["object_id"],"node_id":object["node_id"],"filesystem_type":kind,"classification":classification,
-            "mount_point":p["mount_point"],"shared_filesystem_id":p["shared_filesystem_id"],"capacity":capacity(&[object]),
+            "mount_point":p["mount_point"],"shared_filesystem_id":p["shared_filesystem_id"],"capacity":filesystem_capacity(object),
             "quota":{"limit_bytes":metric(object,"quota_limit_bytes","bytes"),"used_bytes":metric(object,"quota_used_bytes","bytes"),"available_bytes":metric(object,"quota_available_bytes","bytes")},
             "mount_status":metric(object,"nfs_mount_status","enum"),"health":object["health"],"inventory_generation":object["inventory_generation"]})
     }).collect();
-    Ok(Snapshot {time:now,change:change.to_string(),nodes,objects,filesystems,events,cluster})
+    Ok(Snapshot {time:now,change:change.to_string(),nodes,objects,filesystems,events,cluster,disks})
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    fn observed(id: &str, kind: &str, total: &str, used: &str, age: f64) -> Value {
+        let mut object = json!({"object_id":id,"node_id":"node","kind":kind,"parent_ids":[],
+            "properties":{"filesystem_type":"hfs","filesystem_id":id,"local":true},"latest_metrics":{}});
+        for (name, value) in [("capacity_bytes", total), ("used_bytes", used), ("free_bytes", "10"), ("available_bytes", "10")] {
+            object["latest_metrics"][name] = json!({"value":value,"state":"ok","age_seconds":age});
+        }
+        object
+    }
+
+    #[test]
+    fn local_capacity_excludes_nonlocal_and_pseudo_mounts() {
+        let pool = observed("pool", "apfs_container", "100", "20", 1.0);
+        let mut autofs = observed("automount", "mount", "0", "0", 1.0);
+        autofs["properties"]["filesystem_type"] = json!("autofs");
+        autofs["properties"]["local"] = json!(false);
+        autofs["latest_metrics"] = json!({}); // Only cached MNT_NOWAIT readings exist.
+        let mut devfs = observed("devices", "mount", "40", "40", 1.0);
+        devfs["properties"]["filesystem_type"] = json!("devfs");
+        let mut remote = observed("remote", "mount", "800", "300", 1.0);
+        remote["properties"]["filesystem_type"] = json!("smbfs");
+        remote["properties"]["local"] = json!(false);
+        let selected = local_capacity_objects(&[&pool, &autofs, &devfs, &remote]);
+        let result = capacity(&selected);
+        assert_eq!(result["capacity_bytes"]["value"], "100");
+        assert_eq!(result["used_ratio"]["value"], 0.2);
+        assert_eq!(result["capacity_bytes"]["coverage"], json!({"observed":1,"expected":1}));
+    }
+
+    #[test]
+    fn local_capacity_stays_unknown_until_native_physical_inventory_is_available() {
+        // Mount and APFS collection can finish while list physical is pending or failed.
+        let store = json!({"object_id":"store","node_id":"node","kind":"partition","parent_ids":["node"],
+            "properties":{"ciderd_resource_type":"media","source":"diskutil.apfs.list","bsd_name":"disk0s2"}});
+        let mut pool = observed("pool", "apfs_container", "100", "20", 1.0);
+        pool["properties"]["ciderd_resource_type"] = json!("apfs_container");
+        pool["parent_ids"] = json!(["store"]);
+        let mut image = observed("image-mount", "mount", "400", "80", 1.0);
+        image["properties"]["ciderd_resource_type"] = json!("mount");
+        image["properties"]["source"] = json!("/dev/disk4s1");
+        let selected = local_capacity_objects(&[&store, &pool, &image]);
+        assert!(selected.is_empty(), "Unproven native backing cannot enter physical capacity");
+        let result = capacity(&selected);
+        for name in ["capacity_bytes", "used_bytes", "free_bytes", "available_bytes", "used_ratio"] {
+            assert_eq!(result[name]["state"], "unknown");
+            assert!(result[name]["value"].is_null());
+        }
+    }
+
+    #[test]
+    fn local_capacity_preserves_legacy_fallback_alongside_native_nodes() {
+        let native = json!({"object_id":"native","node_id":"native","kind":"node","parent_ids":[],
+            "properties":{"ciderd_resource_type":"host"}});
+        let pool = observed("pool", "apfs_container", "100", "20", 1.0);
+        let mount = observed("legacy-mount", "mount", "200", "40", 1.0);
+        let selected = local_capacity_objects(&[&native, &pool, &mount]);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(capacity(&selected)["capacity_bytes"]["value"], "300");
+        assert_eq!(capacity(&selected)["used_ratio"]["value"], 0.2);
+    }
+
+    #[test]
+    fn local_capacity_requires_exact_physical_backing_when_inventory_is_available() {
+        let disk = json!({"object_id":"disk","node_id":"node","kind":"device","parent_ids":[],
+            "properties":{"ciderd_resource_type":"physical_device","source":"diskutil.list.physical","bsd_name":"disk0"}});
+        let store = json!({"object_id":"store","node_id":"node","kind":"partition","parent_ids":["disk"],
+            "properties":{"bsd_name":"disk0s2"}});
+        let partition = json!({"object_id":"partition","node_id":"node","kind":"partition","parent_ids":["disk"],
+            "properties":{"bsd_name":"disk0s3"}});
+        let mut pool = observed("pool", "apfs_container", "100", "20", 1.0);
+        pool["parent_ids"] = json!(["store"]);
+        let mut physical = observed("physical-mount", "mount", "200", "40", 1.0);
+        physical["properties"]["source"] = json!("/dev/disk0s3");
+        let mut image = observed("image-mount", "mount", "400", "80", 1.0);
+        image["properties"]["source"] = json!("/dev/disk4s1");
+        let mut prefix = observed("prefix-mount", "mount", "800", "160", 1.0);
+        prefix["properties"]["source"] = json!("/dev/disk0s3suffix");
+        let image_store = json!({"object_id":"image-store","node_id":"node","kind":"partition","parent_ids":[],
+            "properties":{"bsd_name":"disk4s2"}});
+        let mut image_pool = observed("image-pool", "apfs_container", "1600", "320", 1.0);
+        image_pool["parent_ids"] = json!(["image-store"]);
+        let selected = local_capacity_objects(&[&disk, &store, &partition, &pool, &physical, &image, &prefix, &image_store, &image_pool]);
+        assert_eq!(capacity(&selected)["capacity_bytes"]["value"], "300");
+        assert_eq!(selected.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_capacity_observers_prefer_complete_then_fresh_measurements() {
+        let mut stale = observed("stale", "mount", "100", "20", 1.0);
+        let mut partial = observed("partial", "mount", "200", "40", 1.0);
+        let mut older = observed("older", "mount", "500", "100", 20.0);
+        let mut current = observed("current", "mount", "1000", "200", 2.0);
+        for object in [&mut stale, &mut partial, &mut older, &mut current] {
+            object["properties"]["filesystem_id"] = json!("same-filesystem");
+        }
+        for measurement in stale["latest_metrics"].as_object_mut().unwrap().values_mut() {
+            measurement["state"] = json!("stale");
+        }
+        partial["latest_metrics"].as_object_mut().unwrap().remove("used_bytes");
+        let selected = local_capacity_objects(&[&stale, &partial, &older, &current]);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(capacity(&selected)["capacity_bytes"]["value"], "1000");
+        assert_eq!(capacity(&selected)["used_ratio"]["value"], 0.2);
+    }
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::*;
+    const ADMIN:&str="disk-read-cache-bound-tests";
+    async fn fixture(count:usize)->(tempfile::TempDir,ReadState,HeaderMap) {
+        let directory=tempfile::tempdir().unwrap();let app=AppState::open(&directory.path().join("read.sqlite3"),ADMIN).await.unwrap();
+        let mut tx=app.db.begin().await.unwrap();
+        for i in 0..count {sqlx::query("INSERT INTO nodes(node_id,name,agent_json,credential_hash,enrolled_at) VALUES (?,?,?,?,0)").bind(Uuid::new_v4().to_string()).bind(format!("node-{i}")).bind("{}").bind(format!("credential-{i}")).execute(&mut *tx).await.unwrap();}
+        tx.commit().await.unwrap();
+        let mut headers=HeaderMap::new();headers.insert("authorization",format!("Bearer {ADMIN}").parse().unwrap());
+        (directory,ReadState{app,pages:Default::default(),budgets:Default::default()},headers)
+    }
+    fn cached(bytes:usize)->Page {Page{owner:String::new(),path:String::new(),query:Parameters::new(),expires:Utc::now().timestamp_millis()+300_000,time:0,change:"0".into(),values:Arc::new(vec![]),bytes,metadata:json!({})}}
+    #[tokio::test]
+    async fn pagination_retains_traversal_and_serialized_byte_bounds() {
+        let (_directory,state,headers)=fixture(2).await;
+        for i in 0..128 {state.pages.lock().unwrap().insert(i.to_string(),cached(1));}
+        let uri:Uri="/api/v1/nodes?limit=1".parse().unwrap();
+        assert_eq!(dispatch(&state,&headers,&uri,"test").await.unwrap_err().status,StatusCode::TOO_MANY_REQUESTS);
+        state.pages.lock().unwrap().clear();state.pages.lock().unwrap().insert("large".into(),cached(32*1024*1024));
+        assert_eq!(dispatch(&state,&headers,&uri,"test").await.unwrap_err().status,StatusCode::TOO_MANY_REQUESTS);
+        state.pages.lock().unwrap().get_mut("large").unwrap().expires=0;
+        assert!(dispatch(&state,&headers,&uri,"test").await.is_ok());
+    }
+    #[tokio::test]
+    async fn snapshot_capacity_and_read_budget_errors_remain_distinct() {
+        let (_directory,state,headers)=fixture(2049).await;let uri:Uri="/api/v1/nodes".parse().unwrap();
+        assert_eq!(dispatch(&state,&headers,&uri,"test").await.unwrap_err().status,StatusCode::SERVICE_UNAVAILABLE);
+        state.budgets.lock().unwrap().insert(store::fingerprint(ADMIN.as_bytes()),(0.0,Utc::now().timestamp_millis()));
+        assert_eq!(dispatch(&state,&headers,&uri,"test").await.unwrap_err().status,StatusCode::TOO_MANY_REQUESTS);
+    }
 }

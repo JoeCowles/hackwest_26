@@ -8,7 +8,10 @@ console for storage telemetry.
 - `crates/ciderd/`: the macOS storage collector and its schema-2 wire contract,
   collectors, isolated workers, fixtures, daemon configuration, and launchd example.
 - `web/`: the Orchard Cluster Console, using live authenticated server reads.
-- `scripts/`: project-local Cargo wrapper, macOS packaging, and synthetic demo client.
+- `scripts/`: project-local Cargo wrapper, TLS integration smoke test, macOS
+  packaging, and synthetic demo client.
+- `simple-nfs-server/`: a separate administrative NFS helper, outside the monitoring
+  workspace; its tests do not change system exports or mounts.
 - `flake.nix` and `flake.lock`: the collector branch's optional Nix development environment.
 
 ## Source of truth
@@ -86,41 +89,48 @@ The SQLite migration adds schema-2 receiver state and raises the schema version
 to 2; an older server refuses this newer database. Back up state before running
 a newly built server against an existing installation.
 
-## Build a macOS server bundle
-
-```sh
-bash scripts/package-macos.sh debug
-```
-
-The script produces `dist/Orchard Server.app` with an ad-hoc signature. Developer
-ID signing and notarization remain separate release work.
-
 ## Integration status
 
-The collector branch is integrated alongside the server and web console.
-Workspace builds/checks and all 100 tests passed; three ignored subprocess
-helpers are exercised by their parent tests. Five server compatibility tests
-cover replay/deduplication, exact wide counter rates and epochs, inventory
-upserts/tombstones, persisted receipts, and credential/privacy rejection.
-The headless server built, and the debug macOS application bundle was rebuilt
-and passed strict code-signature verification.
+The integrated checkout passed 114 workspace tests, with three subprocess helpers
+intentionally ignored as standalone tests and exercised through their parent
+tests. The total includes 31 server tests: 17 unit tests and 14 compatibility
+tests. All 47 web tests and the separate NFS helper's 22 tests passed. Workspace
+check, the default workspace build, and the headless server build also passed.
 
-The real collector and packaged server also passed an isolated local TLS smoke
-test: verified certificates, CLI enrollment, private credentials/state directory,
-two accepted five-second heartbeats, real measurements through authenticated
-read APIs, and the embedded console HTML. This is not a desktop/mobile visual
-review or exhaustive hardware/NFS validation. Alert evaluation/delivery,
-historical read routes, Prometheus/SSE, and other planned APIs remain separate work.
+The latest isolated TLS smoke passed against the workspace server binary and
+actual ciderd process: certificate verification, CLI enrollment, private
+credentials/state, two distinct five-second heartbeats, real measurements,
+all eight read routes authenticated with a viewer credential, and embedded
+console delivery. The smoke command uses the workspace binary by default;
+`--packaged` explicitly selects the separately built application bundle.
 
-To repeat the validation on macOS:
+Browser checks covered desktop and 390 × 844 layouts through a temporary loopback
+proxy that verified the server's upstream TLS certificate. They used the real
+collector plus synthetic records for pagination, tiny rates, partial coverage,
+and offline states. Native-window visual QA, a freshly packaged/signed bundle,
+and deployment were not performed during this review. Live NFS export/mount
+operations and broader hardware/platform coverage remain unverified.
+
+See the [integration review](docs/integration-review.md) for the corrections,
+evidence, and remaining limits. Alert evaluation/delivery, stored historical
+reads, Prometheus/SSE, and other planned APIs remain unimplemented; the console
+exposes the implemented views and actions.
+
+To repeat source validation on macOS:
 
 ```sh
-bash scripts/cargo-local.sh build --workspace --locked
 bash scripts/cargo-local.sh test --workspace --locked --no-fail-fast
 bash scripts/cargo-local.sh check --workspace --locked
 bash scripts/cargo-local.sh build --package orchard-server --no-default-features --locked
-bash scripts/package-macos.sh debug
-codesign --verify --deep --strict 'dist/Orchard Server.app'
+bash scripts/cargo-local.sh build --workspace --locked
+node --test web/tests/*.test.mjs
+node --check web/js/api.js
+node --check web/js/app.js
+node --check web/js/model.js
+node --check web/js/session.js
+node --check web/js/stage.js
+node --check web/js/views.js
+bash scripts/cargo-local.sh test --manifest-path simple-nfs-server/Cargo.toml --locked
 node scripts/smoke-ciderd.mjs
 ```
 
@@ -129,3 +139,19 @@ ephemeral local port, and separate state; it does not modify a running
 installation. It briefly gathers this Mac's real storage telemetry and stops
 its processes afterward. Successful runs remove temporary state; failures keep
 private diagnostic artifacts under the ignored `.codex-staging/` directory.
+
+## Optional macOS packaging
+
+Packaging and bundle verification are separate from the source checks above:
+
+```sh
+bash scripts/package-macos.sh debug
+codesign --verify --deep --strict 'dist/Orchard Server.app'
+node scripts/smoke-ciderd.mjs --packaged
+```
+
+The packaging script produces `dist/Orchard Server.app` with an ad-hoc signature.
+The packaged smoke also requires the workspace ciderd binary. Developer ID
+signing and notarization remain separate release work. These commands are
+instructions for a new packaging run, not evidence that this review rebuilt or
+validated a distributable bundle.

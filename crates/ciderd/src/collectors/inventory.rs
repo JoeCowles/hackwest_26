@@ -240,7 +240,35 @@ pub fn parse_iokit(bytes: &[u8], node: &str, boot: &str) -> Result<Collected> {
         )?;
         ensure!(registry <= u64::MAX as u128, "invalid registry identity");
         let id = scoped_id(node, boot, "iokit-driver", &registry.to_string());
-        result.resource(Resource::new(id.clone(),"controller",crate::model::attrs(json!({"registry_entry_id":registry.to_string(),"source":"IOBlockStorageDriver","scope":"driver","smart_eligible":false}))))?;
+        let mut fields = crate::model::attrs(
+            json!({"registry_entry_id":registry.to_string(),"source":"IOBlockStorageDriver","scope":"driver","smart_eligible":false,"media_mapping_state":"unavailable","whole_media_candidates":[]}),
+        );
+        // Optional mapping failure never discards valid driver statistics.
+        let mapping = (|| -> Result<Value> {
+            ensure!(
+                row.get("media_mapping_state").and_then(Value::as_str) == Some("ok"),
+                "mapping unavailable"
+            );
+            let mut candidates = Vec::new();
+            for media in array(row, "whole_media_candidates")? {
+                let name = bsd(media, "bsd_name")?;
+                let registry = uint(media.get("registry_entry_id").context("missing media ID")?)?;
+                ensure!(registry <= u64::MAX as u128, "media ID out of range");
+                let whole = media
+                    .get("whole")
+                    .and_then(Value::as_bool)
+                    .context("missing Whole flag")?;
+                candidates.push(
+                    json!({"bsd_name":name,"registry_entry_id":registry.to_string(),"whole":whole}),
+                );
+            }
+            Ok(candidates.into())
+        })();
+        if let Ok(candidates) = mapping {
+            fields.insert("whole_media_candidates".into(), candidates);
+            fields.insert("media_mapping_state".into(), "ok".into());
+        }
+        result.resource(Resource::new(id.clone(), "controller", fields))?;
         let stats = row
             .get("statistics")
             .filter(|v| v.is_object())

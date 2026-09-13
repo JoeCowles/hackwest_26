@@ -5,7 +5,7 @@ mod nfs;
 mod smart;
 
 pub use inventory::{parse_apfs, parse_inventory, parse_iokit, parse_snapshots};
-pub use mounts::{parse_capacity, parse_mounts};
+pub use mounts::{parse_capacity, parse_mount_identity, parse_mounts};
 pub use nfs::{parse_nfs, parse_nfs_status};
 pub use smart::parse_smart;
 

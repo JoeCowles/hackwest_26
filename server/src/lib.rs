@@ -5,6 +5,8 @@ pub mod cider_api;
 pub mod cider_wire;
 pub mod config;
 pub mod error;
+pub mod disk_view;
+pub mod hardware;
 pub mod model;
 pub mod read_api;
 pub mod store;

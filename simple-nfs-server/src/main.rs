@@ -38,7 +38,7 @@ enum Cmd {
         #[arg(long)]
         stop_nfsd: bool,
     },
-    /// Mount the export on this client and report the negotiated options. Requires root.
+    /// Mount the configured export and report observed mount flags. Requires root.
     Mount,
     /// Unmount the export. Requires root.
     Unmount,

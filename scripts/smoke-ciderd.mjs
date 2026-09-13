@@ -1,4 +1,5 @@
-// End-to-end local TLS test. Build both binaries and the debug app bundle first.
+// End-to-end local TLS test. Build the workspace first. --packaged explicitly
+// checks the separately built debug app instead of silently testing a stale bundle.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import https from 'node:https';
@@ -10,15 +11,25 @@ import { fileURLToPath } from 'node:url';
 
 process.umask(0o077);
 const root = fileURLToPath(new URL('../', import.meta.url));
+export async function smokeCiderd({ packaged = false, nativeWindow = false, beforeEnroll = async () => {}, verify = async () => {}, cleanupOnFailure = false } = {}) {
+const serverBinary = path.join(root, packaged ? 'dist/Orchard Server.app/Contents/MacOS/orchard-server' : 'target/debug/orchard-server');
 const staging = path.join(root, '.codex-staging');
 await fs.mkdir(staging, { recursive: true, mode: 0o700 });
 const temp = await fs.mkdtemp(path.join(staging, 'cider-smoke-'));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const children = [];
 const logs = new Map();
+let interrupted = false;
+const stopOnSignal = () => {
+  interrupted = true;
+  for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+};
+process.once('SIGINT', stopOnSignal);
+process.once('SIGTERM', stopOnSignal);
 const insist = (value, message) => { if (!value) throw new Error(message); };
 
 function start(executable, args) {
+  insist(!interrupted, 'Smoke test interrupted');
   const child = spawn(executable, args, { cwd: temp, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   child.stdout.on('data', chunk => { output = (output + chunk).slice(-32768); });
@@ -55,19 +66,19 @@ try {
   await new Promise(resolve => reservation.close(resolve));
   const base = `https://127.0.0.1:${port}`;
   const state = path.join(temp, 'server');
-  const server = start(path.join(root, 'dist/Orchard Server.app/Contents/MacOS/orchard-server'), ['--headless', '--bind', `127.0.0.1:${port}`, '--data-dir', state, '--tls-cert', cert, '--tls-key', key]);
+  const server = start(serverBinary, [...(nativeWindow ? [] : ['--headless']), '--bind', `127.0.0.1:${port}`, '--data-dir', state, '--tls-cert', cert, '--tls-key', key]);
   let admin;
   for (let i = 0; i < 100; i++) {
     try { admin = (await fs.readFile(path.join(state, 'admin-token'), 'utf8')).trim(); break; } catch {}
-    insist(server.exitCode === null, 'Packaged server exited during startup');
+    insist(server.exitCode === null, 'Server exited during startup');
     await sleep(100);
   }
   insist(admin, 'Server did not create its private administrator credential');
   const trust = await fs.readFile(ca);
-  async function request(method, url, body) {
+  async function request(method, url, body, credential = admin) {
     const payload = body === undefined ? undefined : JSON.stringify(body);
     return new Promise((resolve, reject) => {
-      const headers = { authorization: `Bearer ${admin}`, 'x-request-id': randomUUID(), 'x-request-timestamp': new Date().toISOString() };
+      const headers = { authorization: `Bearer ${credential}`, 'x-request-id': randomUUID(), 'x-request-timestamp': new Date().toISOString() };
       if (payload !== undefined) { headers['content-type'] = 'application/json'; headers['content-length'] = Buffer.byteLength(payload); }
       const req = https.request(new URL(url, base), { method, headers, ca: trust, rejectUnauthorized: true, timeout: 4000 }, res => {
         let text = '';
@@ -86,6 +97,7 @@ try {
     try { issued = await request('POST', '/api/v1/enrollment-tokens', {}); break; } catch { await sleep(100); }
   }
   insist(issued?.status === 201, 'Could not create enrollment token over verified TLS');
+  await beforeEnroll({ request, base });
   const tokenFile = path.join(temp, 'one-use-token');
   await fs.writeFile(tokenFile, issued.json().data.enrollment_token, { mode: 0o600 });
   const identity = path.join(temp, 'node.json'), credential = path.join(temp, 'node-token'), nodeState = path.join(temp, 'node-state');
@@ -127,17 +139,31 @@ try {
   }
   insist(seen.size >= 2, 'Did not observe two accepted five-second heartbeats');
   insist(metricCount > 0, 'No real collector measurements appeared in the read API');
+  const viewer = (await fs.readFile(path.join(state, 'viewer-token'), 'utf8')).trim();
+  const readRoutes = ['/api/v1/capabilities', '/api/v1/cluster', '/api/v1/nodes', `/api/v1/nodes/${node}`, `/api/v1/nodes/${node}/inventory`, '/api/v1/filesystems', '/api/v1/events'];
+  for (const route of readRoutes) {
+    const response = await request('GET', route, undefined, viewer);
+    insist(response.status === 200, `Viewer read failed: ${route} (${response.status})`);
+    const body = response.json();
+    insist(body.meta?.api_version === '1' && Object.hasOwn(body, 'data'), `Invalid read envelope: ${route}`);
+    if (route.endsWith('/inventory')) {
+      insist(body.data.length > 0, 'Current inventory is empty after real collection');
+      const detail = await request('GET', `/api/v1/objects/${body.data[0].object_id}`, undefined, viewer);
+      insist(detail.status === 200, 'Viewer object detail read failed');
+    }
+  }
+  await verify({ root, temp, base, node, viewer, request, daemon, server, trust, start, run });
   const page = await request('GET', '/');
   insist(page.status === 200 && /Orchard/.test(page.text), 'Embedded web console did not load');
   const help = await run(cider, ['enroll-server', '--help']);
   insist(help.includes('Enroll with Orchard'), 'Enrollment help description is incorrect');
-  console.log(JSON.stringify({ result: 'passed', verified_tls: true, cli_enrollment: true, private_credentials: true, private_state_directory: true, distinct_heartbeats: seen.size, read_api_measurement_occurrences: metricCount, embedded_console: true, help_text: true }));
+  console.log(JSON.stringify({ result: 'passed', server_binary: packaged ? 'packaged' : 'workspace', verified_tls: true, cli_enrollment: true, private_credentials: true, private_state_directory: true, distinct_heartbeats: seen.size, read_api_measurement_occurrences: metricCount, viewer_read_routes: 8, embedded_console: true, help_text: true }));
   succeeded = true;
 } catch (error) {
   let i = 0;
-  for (const log of logs.values()) await fs.writeFile(path.join(temp, `process-${++i}.log`), log(), { mode: 0o600 });
+  if (!cleanupOnFailure) for (const log of logs.values()) await fs.writeFile(path.join(temp, `process-${++i}.log`), log(), { mode: 0o600 });
   console.error(error.message);
-  console.error('Private diagnostic artifacts: ' + temp);
+  if (!cleanupOnFailure) console.error('Private diagnostic artifacts: ' + temp);
   process.exitCode = 1;
 } finally {
   for (const child of [...children].reverse()) if (child.exitCode === null && child.signalCode === null) {
@@ -147,5 +173,14 @@ try {
     await stopped;
     clearTimeout(timeout);
   }
-  if (succeeded) await fs.rm(temp, { recursive: true, force: true });
+  if (succeeded || cleanupOnFailure) await fs.rm(temp, { recursive: true, force: true });
+  process.removeListener('SIGINT', stopOnSignal);
+  process.removeListener('SIGTERM', stopOnSignal);
+}
+
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.slice(2).some(arg => arg !== '--packaged')) throw new Error('Usage: node scripts/smoke-ciderd.mjs [--packaged]');
+  await smokeCiderd({ packaged: process.argv.includes('--packaged') });
 }

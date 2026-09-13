@@ -742,3 +742,11 @@ fn cyclic_enrichment_ownership_is_rejected_without_mutating_inventory() {
     state.reconcile("roots", vec![], vec![], true).unwrap();
     assert!(state.metadata.group_owners.is_empty());
 }
+
+#[test]
+fn old_metadata_has_unknown_topology_context_until_fresh_source_evidence() {
+    let mut value = serde_json::to_value(ciderd::state::Metadata::default()).unwrap();
+    value.as_object_mut().unwrap().remove("topology_evidence");
+    let metadata: ciderd::state::Metadata = serde_json::from_value(value).unwrap();
+    assert!(metadata.topology_evidence.is_empty());
+}

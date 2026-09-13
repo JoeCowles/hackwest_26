@@ -1,0 +1,32 @@
+{
+  "captured_at": "2026-09-12",
+  "redacted": true,
+  "proof": [
+    {
+      "mount_class": "boot_snapshot",
+      "source": "/dev/disk3s1s1",
+      "state": "ok",
+      "volume_uuid": "SNAPSHOT-UUID",
+      "media_bsd_name": "disk3s1s1",
+      "parent_volume_uuid": "SYSTEM-VOLUME-UUID",
+      "parent_media_bsd_name": "disk3s1",
+      "matching_graph_volumes": [
+        "disk3s1"
+      ],
+      "native_unique_match": true
+    },
+    {
+      "mount_class": "ordinary_local_volume",
+      "source": "/dev/disk3s5",
+      "state": "ok",
+      "volume_uuid": "DATA-VOLUME-UUID",
+      "media_bsd_name": "disk3s5",
+      "parent_volume_uuid": null,
+      "parent_media_bsd_name": null,
+      "matching_graph_volumes": [
+        "disk3s5"
+      ],
+      "native_unique_match": true
+    }
+  ]
+}

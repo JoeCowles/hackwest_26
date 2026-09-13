@@ -524,3 +524,77 @@ async fn live_worker_mounts_iokit_capacity_identity_and_nstatus_probe_are_bounde
         "gone" | "unsupported" | "permission_denied"
     )));
 }
+
+#[test]
+fn iokit_media_evidence_is_optional_and_does_not_change_counter_epoch() {
+    let base = include_bytes!("fixtures/iokit.plist");
+    let original = ciderd::collectors::parse_iokit(base, "node", "boot").unwrap();
+    let mut plist: plist::Value = plist::from_bytes(base).unwrap();
+    let row = plist.as_array_mut().unwrap()[0]
+        .as_dictionary_mut()
+        .unwrap();
+    let mut media = plist::Dictionary::new();
+    media.insert("bsd_name".into(), "disk0".into());
+    media.insert("registry_entry_id".into(), "4294968000".into());
+    media.insert("whole".into(), true.into());
+    row.insert(
+        "whole_media_candidates".into(),
+        plist::Value::Array(vec![plist::Value::Dictionary(media)]),
+    );
+    row.insert("media_mapping_state".into(), "ok".into());
+    let mut bytes = Vec::new();
+    plist.to_writer_xml(&mut bytes).unwrap();
+    let mapped = ciderd::collectors::parse_iokit(&bytes, "node", "boot").unwrap();
+    assert_eq!(
+        mapped.resources[0].attributes["whole_media_candidates"][0]["bsd_name"],
+        "disk0"
+    );
+    assert_eq!(mapped.samples[0].metrics, original.samples[0].metrics);
+    assert_eq!(
+        mapped.resources[0].resource_id,
+        original.resources[0].resource_id
+    );
+    assert_eq!(
+        original.resources[0].attributes["media_mapping_state"],
+        "unavailable"
+    );
+}
+
+#[test]
+fn mount_identity_request_is_strict_and_local_device_only() {
+    let valid =
+        br#"{"operation":"mount-identity","path":"/","fsid":[1,2],"source":"/dev/disk3s1s1"}"#;
+    assert!(ciderd::platform::parse_worker_request(valid).is_ok());
+    for invalid in [
+        br#"{"operation":"mount-identity","path":"/net","fsid":[1,2],"source":"server:/export"}"#.as_slice(),
+        br#"{"operation":"mount-identity","path":"relative","fsid":[1,2],"source":"/dev/disk0"}"#,
+        br#"{"operation":"mount-identity","path":"/","fsid":[1,2],"source":"/dev/disk0","extra":true}"#,
+    ] { assert!(ciderd::platform::parse_worker_request(invalid).is_err()); }
+}
+
+#[test]
+fn mount_identity_parser_rejects_races_and_keeps_authoritative_snapshot_parent() {
+    let mount = parse_mounts(include_bytes!("fixtures/mounts.json"), NODE, BOOT)
+        .unwrap()
+        .resources
+        .into_iter()
+        .find(|r| r.resource_type == "mount")
+        .unwrap();
+    let value = json!({"state":"ok","reason":null,"fsid":mount.attributes["fsid"],"source":mount.attributes["source"],
+        "volume_uuid":"snapshot","media_bsd_name":"disk3s1s1","media_registry_id":"42",
+        "parent_volume_uuid":"volume","parent_media_bsd_name":"disk3s1","parent_media_registry_id":"41"});
+    let parsed =
+        ciderd::collectors::parse_mount_identity(&serde_json::to_vec(&value).unwrap(), &mount)
+            .unwrap();
+    assert_eq!(parsed.resources[0].resource_id, mount.resource_id);
+    assert_eq!(
+        parsed.resources[0].attributes["mount_identity"]["parent_volume_uuid"],
+        "volume"
+    );
+    let mut race = value;
+    race["fsid"] = json!([987, 654]);
+    assert!(
+        ciderd::collectors::parse_mount_identity(&serde_json::to_vec(&race).unwrap(), &mount)
+            .is_err()
+    );
+}

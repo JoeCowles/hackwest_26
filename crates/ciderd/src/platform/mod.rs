@@ -9,9 +9,19 @@ pub const MAX_WORKER_OUTPUT: usize = 4 * 1024 * 1024;
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum WorkerRequest {
     Mounts,
-    Capacity { path: String, fsid: [i32; 2] },
+    Capacity {
+        path: String,
+        fsid: [i32; 2],
+    },
+    MountIdentity {
+        path: String,
+        fsid: [i32; 2],
+        source: String,
+    },
     Iokit,
-    NfsStatus { fsid: [i32; 2] },
+    NfsStatus {
+        fsid: [i32; 2],
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -20,6 +30,7 @@ pub struct SystemInfo {
     pub os_version: String,
     pub os_build: String,
     pub target: String,
+    pub model_identifier: Result<String, String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -72,6 +83,7 @@ pub fn parse_worker_request(bytes: &[u8]) -> Result<WorkerRequest> {
     // with deny_unknown_fields. Check the operation-specific input envelope first.
     let allowed: &[&str] = match fields.get("operation").and_then(serde_json::Value::as_str) {
         Some("mounts" | "iokit") => &["operation"],
+        Some("mount-identity") => &["operation", "path", "fsid", "source"],
         Some("capacity") => &["operation", "path", "fsid"],
         Some("nfs-status") => &["operation", "fsid"],
         _ => anyhow::bail!("unknown worker operation"),
@@ -80,5 +92,25 @@ pub fn parse_worker_request(bytes: &[u8]) -> Result<WorkerRequest> {
         fields.len() == allowed.len() && fields.keys().all(|k| allowed.contains(&k.as_str())),
         "unexpected worker request fields"
     );
-    Ok(serde_json::from_value(value)?)
+    let request = serde_json::from_value(value)?;
+    if let WorkerRequest::MountIdentity { path, source, .. } = &request {
+        anyhow::ensure!(
+            path.starts_with('/') && path.len() <= 4096 && !path.contains('\0'),
+            "invalid mount identity path"
+        );
+        anyhow::ensure!(
+            source.strip_prefix("/dev/").is_some_and(valid_media_name),
+            "mount identity requires local device source"
+        );
+    }
+    Ok(request)
+}
+
+pub fn valid_media_name(name: &str) -> bool {
+    name.starts_with("disk")
+        && name.len() <= 64
+        && name.len() > 4
+        && name[4..]
+            .split('s')
+            .all(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
 }

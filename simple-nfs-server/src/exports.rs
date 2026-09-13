@@ -7,7 +7,7 @@
 
 use crate::config::Config;
 use crate::sys;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -16,29 +16,47 @@ const BEGIN_MARK: &str = "# >>> orchard-nfs managed block >>>";
 const END_MARK: &str = "# <<< orchard-nfs managed block <<<";
 
 /// Return `content` with the managed block removed. Everything else is untouched.
-pub fn strip_managed_block(content: &str) -> String {
+pub fn strip_managed_block(content: &str) -> Result<String> {
     let mut out = String::with_capacity(content.len());
     let mut skipping = false;
-    for line in content.lines() {
+    let mut seen = false;
+    for original in content.split_inclusive('\n') {
+        let line = original.trim_end_matches(['\r', '\n']);
+        ensure!(
+            !matches!(line.trim(), BEGIN_MARK | END_MARK) || line == line.trim(),
+            "managed export markers must occupy an exact line; original exports retained"
+        );
         if line == BEGIN_MARK {
+            ensure!(
+                !seen && !skipping,
+                "duplicate or nested managed export block; original exports retained"
+            );
+            seen = true;
             skipping = true;
             continue;
         }
         if line == END_MARK {
+            ensure!(
+                skipping,
+                "unmatched managed export block end; original exports retained"
+            );
             skipping = false;
             continue;
         }
         if !skipping {
-            out.push_str(line);
-            out.push('\n');
+            out.push_str(original);
         }
     }
-    out
+    ensure!(
+        !skipping,
+        "unclosed managed export block; original exports retained"
+    );
+    Ok(out)
 }
 
 /// Return `content` with the managed block replaced by one containing `export_line`.
-pub fn with_managed_block(content: &str, export_line: &str) -> String {
-    let mut out = strip_managed_block(content);
+pub fn with_managed_block(content: &str, export_line: &str) -> Result<String> {
+    let mut out = strip_managed_block(content)?;
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
@@ -52,7 +70,7 @@ pub fn with_managed_block(content: &str, export_line: &str) -> String {
     out.push('\n');
     out.push_str(END_MARK);
     out.push('\n');
-    out
+    Ok(out)
 }
 
 pub fn has_managed_block(content: &str) -> bool {
@@ -85,6 +103,34 @@ fn read_or_empty(path: &Path) -> Result<String> {
     }
 }
 
+fn finish_validation(path: &Path, previous: Option<&str>, validation: Result<bool>) -> Result<()> {
+    let error = match validation {
+        Ok(true) => return Ok(()),
+        Ok(false) => anyhow::anyhow!("nfsd checkexports rejected the configuration"),
+        Err(error) => error.context("could not validate the new exports"),
+    };
+    let restored = if let Some(previous) = previous {
+        std::fs::write(path, previous)
+    } else {
+        std::fs::remove_file(path)
+    };
+    if let Err(restore_error) = restored {
+        return Err(error.context(format!("restoring previous exports also failed: {restore_error}; administrator recovery is required")));
+    }
+    Err(error.context("restored the previous exports file or its original absence"))
+}
+
+fn write_exports(path: &Path, next: &str, previous: Option<&str>) -> Result<()> {
+    match std::fs::write(path, next) {
+        Ok(()) => Ok(()),
+        Err(error) => finish_validation(
+            path,
+            previous,
+            Err(error).with_context(|| format!("writing {}", path.display())),
+        ),
+    }
+}
+
 pub async fn setup(cfg: &Config) -> Result<()> {
     sys::require_macos()?;
     sys::require_root("setup-server")?;
@@ -99,32 +145,26 @@ pub async fn setup(cfg: &Config) -> Result<()> {
 
     let exports = Path::new(EXPORTS);
     let current = read_or_empty(exports)?;
+    let line = cfg.export_line();
+    let next = with_managed_block(&current, &line)?;
     let backup_path = if exports.exists() {
         Some(backup(exports)?)
     } else {
         None
     };
 
-    let line = cfg.export_line();
-    let next = with_managed_block(&current, &line);
-    std::fs::write(exports, &next).with_context(|| format!("writing {EXPORTS}"))?;
+    write_exports(
+        exports,
+        &next,
+        backup_path.as_ref().map(|_| current.as_str()),
+    )?;
     info!("wrote export: {line}");
 
-    if !sys::run_ok("nfsd", &["checkexports"]).await? {
-        match &backup_path {
-            Some(b) => {
-                std::fs::copy(b, exports)?;
-                anyhow::bail!(
-                    "nfsd checkexports rejected the configuration; restored {}",
-                    b.display()
-                );
-            }
-            None => {
-                std::fs::remove_file(exports)?;
-                anyhow::bail!("nfsd checkexports rejected the configuration; removed {EXPORTS}");
-            }
-        }
-    }
+    finish_validation(
+        exports,
+        backup_path.as_ref().map(|_| current.as_str()),
+        sys::run_ok("nfsd", &["checkexports"]).await,
+    )?;
 
     sys::run("nfsd", &["enable"]).await?;
     if sys::run_ok("nfsd", &["status"]).await? {
@@ -154,11 +194,12 @@ pub async fn teardown(stop_nfsd: bool) -> Result<()> {
     }
 
     let current = std::fs::read_to_string(exports)?;
+    let stripped = strip_managed_block(&current)?;
     if !has_managed_block(&current) {
         info!("no simple-nfs-server block in {EXPORTS}; nothing to remove");
     } else {
         backup(exports)?;
-        std::fs::write(exports, strip_managed_block(&current))?;
+        write_exports(exports, &stripped, Some(&current))?;
         info!("removed simple-nfs-server block from {EXPORTS}");
         if sys::run_ok("nfsd", &["status"]).await? {
             sys::run("nfsd", &["update"]).await?;
@@ -190,18 +231,18 @@ mod tests {
     #[test]
     fn strip_removes_only_managed_block() {
         let content = format!("{HAND_WRITTEN}{BEGIN_MARK}\n/managed -ro 1.2.3.4\n{END_MARK}\n");
-        assert_eq!(strip_managed_block(&content), HAND_WRITTEN);
+        assert_eq!(strip_managed_block(&content).unwrap(), HAND_WRITTEN);
     }
 
     #[test]
     fn strip_is_noop_without_block() {
-        assert_eq!(strip_managed_block(HAND_WRITTEN), HAND_WRITTEN);
+        assert_eq!(strip_managed_block(HAND_WRITTEN).unwrap(), HAND_WRITTEN);
     }
 
     #[test]
     fn with_block_is_idempotent() {
-        let once = with_managed_block(HAND_WRITTEN, "/a -ro 1.1.1.1");
-        let twice = with_managed_block(&once, "/b -ro 2.2.2.2");
+        let once = with_managed_block(HAND_WRITTEN, "/a -ro 1.1.1.1").unwrap();
+        let twice = with_managed_block(&once, "/b -ro 2.2.2.2").unwrap();
         assert!(twice.starts_with(HAND_WRITTEN));
         assert!(twice.contains("/b -ro 2.2.2.2"));
         assert!(!twice.contains("/a -ro 1.1.1.1"));
@@ -210,7 +251,7 @@ mod tests {
 
     #[test]
     fn with_block_on_empty_file() {
-        let out = with_managed_block("", "/x -ro 1.1.1.1");
+        let out = with_managed_block("", "/x -ro 1.1.1.1").unwrap();
         assert!(out.starts_with(BEGIN_MARK));
         assert!(out.ends_with(&format!("{END_MARK}\n")));
     }
@@ -219,5 +260,68 @@ mod tests {
     fn active_lines_ignore_comments_and_blanks() {
         let content = "# comment\n\n/a -ro 1.1.1.1\n   \n/b 2.2.2.2\n";
         assert_eq!(active_export_lines(content), 2);
+    }
+
+    #[test]
+    fn malformed_managed_blocks_are_rejected() {
+        for content in [
+            format!("{BEGIN_MARK}\n/managed\n"),
+            format!("{END_MARK}\n{HAND_WRITTEN}"),
+            format!("{BEGIN_MARK}\n{BEGIN_MARK}\n{END_MARK}\n"),
+            format!("{BEGIN_MARK}\n{END_MARK}\n{BEGIN_MARK}\n{END_MARK}\n"),
+            format!(" {BEGIN_MARK}\n/managed\n {END_MARK}\n"),
+        ] {
+            assert!(
+                strip_managed_block(&content).is_err(),
+                "accepted malformed markers"
+            );
+            assert!(with_managed_block(&content, "/new -ro client").is_err());
+        }
+    }
+
+    #[test]
+    fn removing_a_block_preserves_other_bytes_and_missing_final_newline() {
+        let before = "# existing comment\r\n/other -ro client\r\n";
+        let after = "# final comment";
+        let content = format!("{before}{BEGIN_MARK}\n/managed\n{END_MARK}\n{after}");
+        assert_eq!(
+            strip_managed_block(&content).unwrap(),
+            format!("{before}{after}")
+        );
+        assert_eq!(strip_managed_block(after).unwrap(), after);
+    }
+
+    #[test]
+    fn validator_launch_failure_restores_previous_file_or_absence() {
+        let path = std::env::temp_dir().join(format!(
+            "orchard-nfs-validation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(path.clone());
+        for previous in [Some(HAND_WRITTEN), None] {
+            std::fs::write(&path, "/new -ro client\n").unwrap();
+            assert!(
+                finish_validation(
+                    &path,
+                    previous,
+                    Err(anyhow::anyhow!("validator unavailable"))
+                )
+                .is_err()
+            );
+            match previous {
+                Some(content) => assert_eq!(std::fs::read_to_string(&path).unwrap(), content),
+                None => assert!(!path.exists()),
+            }
+        }
     }
 }

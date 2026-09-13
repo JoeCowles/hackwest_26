@@ -136,6 +136,13 @@ async fn authorize(
             hash
         }
     };
+    if let Role::Node(node) = role {
+        let native: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cider_nodes WHERE node_id=?")
+            .bind(node).fetch_one(&mut **tx).await?;
+        if native != 0 {
+            return Err(ApiError::conflict("This node uses ciderd ingestion; do not mix ingestion protocols"));
+        }
+    }
     let request_id = headers
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
