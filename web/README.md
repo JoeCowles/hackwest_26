@@ -1,32 +1,62 @@
-# Orchard live console
+# Cider live console
 
 The Rust server embeds and serves this frontend at its own root URL, normally
 `http://127.0.0.1:8787/`. Rebuild and restart the server after changing web assets.
 Running a separate static development server is not the supported live setup.
 
-1. Start the server with `bash scripts/cargo-local.sh run -p orchard-server`.
+1. Start the server with `bash scripts/cargo-local.sh run -p cider-server`.
 2. In the native application, choose **Open web console** and **Copy viewer credential**.
 3. Paste the viewer credential into the console's connection form.
 
 For headless operation, use `-- --headless`. The current viewer credential is in
 `viewer-token` in the server data directory, normally
-`~/Library/Application Support/Orchard Server`. It has owner-only permissions,
-expires eight hours after server startup, and rotates on restart. The browser
-keeps it in memory only; disconnect or reload clears it. Do not use admin or node
-credentials in the browser. Remote bindings require TLS as before.
+`~/Library/Application Support/Cider Server`. It has owner-only permissions.
+The server reuses this credential across restarts, without a fixed expiration.
+To replace it, stop the server and remove or replace its `viewer-token` file
+before starting again; browsers holding the old token must reconnect with the
+current credential.
+After a successful authenticated core read, the browser saves only the read-only
+viewer credential in this server origin's local storage (`cider.viewer-token`).
+Reloading or reopening the browser restores it and reconnects automatically;
+temporary network/server failures retain it while retrying. **Disconnect** removes
+the saved token and clears this page's observations. Authentication rejection
+also removes it and returns to the connection form. A browser that blocks storage
+can still connect for the current page session and shows why persistence failed;
+if removal is blocked, the page disconnects and explains how to clear site data.
+Administrator and node credentials are never accepted by this connection form or
+saved by it. Remote bindings require TLS as before.
 
 The console uses authenticated read routes documented in Server Spec section 16.
-Cluster and node summaries poll every five seconds while visible and every
-thirty seconds while hidden, independently of optional tables and inventory.
+Cluster, node, selected-host disk, and attention summaries poll every three
+seconds while visible and every thirty seconds while hidden, independently of
+optional tables and inventory. Collector heartbeats remain five seconds; a
+three-second browser refresh does not promise end-to-end detection within three
+seconds.
 Reads time out and core failures back off with Retry-After support. Core values
 older than 15 seconds are hidden, including immediately after sleep/visibility
 changes. A core refresh exceeding 15 seconds cannot receive a new success time;
 its pending requests settle before another core poll starts.
 
 Filesystem and event tables fetch only the active view's first 100-row page.
-Previous/Next navigate a frozen server snapshot, with accepted pages cached in
-memory. The table shows its row range, whether more rows exist, and its snapshot
-time; no rows are silently truncated. **Refresh snapshot** starts a new traversal.
+The first filesystem page follows current rows every three seconds while visible
+(thirty while hidden), subject to read completion and Retry-After. **Next** pauses
+following: Previous/Next then navigate one frozen server snapshot, with accepted
+pages cached in memory. **Refresh snapshot** starts a new traversal and resumes
+following the first filesystem page. Event evidence remains frozen until manually
+refreshed. The table shows its row range, whether more rows exist, following/paused
+status, and its snapshot time; no rows are silently truncated.
+Automatic filesystem replacement sends `X-Cider-Release-Cursor` with the prior
+first page's cursor, releasing only that matching snapshot before allocating its
+replacement. Manual refresh and frozen page navigation retain their snapshots.
+If replacement fails after release, the dated local rows remain visible and
+Next is disabled until an automatic retry or **Refresh snapshot** succeeds.
+Periodic complete node and disk traversals also retain their initial snapshot
+handle for release on their next first-page read, including after reaching the
+terminal page. These handles stay with their API client, route, and query, and
+are cleared on disconnect. Release retries tolerate expired or absent snapshots;
+Retry-After continues to govern retries. The server allows 240 reads per minute
+per credential with a burst of 40; larger traversals and additional tabs can
+still encounter the read budget.
 Server cursors expire five minutes after snapshot creation; an expired cursor
 retains already displayed pages and shows a refresh action. Table errors and slow
 page loads do not block core summaries. Security and host event views send their
@@ -97,6 +127,19 @@ Run the browser-independent model tests from the repository root:
 ```sh
 node --test web/tests/*.test.mjs
 ```
+
+Viewer-session and refresh verification on 2026-09-13: all 153 web tests pass.
+Twenty session/refresh regressions cover same-origin saved viewer restoration,
+temporary-outage retry, successful-authentication-only persistence, explicit
+disconnect and authentication rejection, unavailable browser storage, obsolete
+requests and child callbacks, page disposal, visible/hidden polling cadence,
+filesystem following versus frozen paging, and Retry-After. These tests run
+production components and API/session code with controlled browser storage,
+network responses, and timers; they do not claim rendered browser QA.
+Five additional HTTP-client regressions cover automatic-only cursor release,
+manual traversal retention, failed replacement and disabled stale paging,
+first-page-only release headers, and release handles across complete node/disk
+traversals and selected-host changes.
 
 Validation on 2026-09-12: all 76 web tests pass, covering rate, counter, and integer gauge
 formatting, partial host/device coverage, availability, chart scaling and gaps,

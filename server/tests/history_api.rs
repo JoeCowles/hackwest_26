@@ -3,7 +3,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use orchard_server::{
+use cider_server::{
     api, read_api,
     store::{AppState, fingerprint, timestamp},
 };

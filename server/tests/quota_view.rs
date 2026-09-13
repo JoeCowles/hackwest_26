@@ -1,4 +1,4 @@
-use orchard_server::quota::project;
+use cider_server::quota::project;
 use serde_json::{Value, json};
 fn node() -> Value {
     json!({"node_id":"n","name":"Node","availability":"online","boot_id":"b","agent_generation":"1","agent_session_id":"s"})
@@ -93,7 +93,7 @@ fn configured_node(id: &str) -> (Value, Value) {
 }
 #[test]
 fn quota_unconfigured_requires_every_selected_current_node_configuration() {
-    use orchard_server::quota::coverage;
+    use cider_server::quota::coverage;
     let (n, a) = configured_node("a");
     let (m, mut b) = configured_node("b");
     let q = std::collections::BTreeMap::new();
@@ -117,7 +117,7 @@ fn quota_unconfigured_requires_every_selected_current_node_configuration() {
 }
 #[test]
 fn quota_uid_filter_with_no_matching_rows_is_not_available_coverage() {
-    use orchard_server::quota::coverage;
+    use cider_server::quota::coverage;
     let (n, mut h) = configured_node("n");
     h["properties"]["diagnostics_configuration"]["nfs_quotas_enabled"] = json!(true);
     let q = std::collections::BTreeMap::from([("uid".into(), "999".into())]);

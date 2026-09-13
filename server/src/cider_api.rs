@@ -177,15 +177,16 @@ async fn heartbeat(
     if receiver.inventory.is_some_and(|revision| hb.inventory.revision < revision) {
         return Err(ApiError::conflict("Inventory revision moved backwards within an agent generation"));
     }
-    // Only explicit removal of a physical device observed during this boot is
-    // evidence of disconnection. Missing upserts and reboot cleanup are not.
+    // Explicit removal must follow an observation in this agent session.
+    // Missing upserts and cleanup of a previous session are not disconnections.
     let prior_devices: Vec<Resource> = if hb.inventory.included {
         receiver.graph.resources.values().filter(|resource| {
-            resource.resource_type == "physical_device"
+            removal_identity(resource).is_some()
                 && receiver.graph.acquisition.get(&format!("resource:{}", resource.resource_id))
-                    .is_some_and(|a| a["boot_id"] == hb.boot_id)
+                    .is_some_and(|a| acquisition_matches(a, &hb))
         }).cloned().collect()
     } else { Vec::new() };
+    let removal_watches = removal_watch_correlations(&mut tx, &hb, &receiver.graph, &prior_devices).await?;
     let graph_changed = if hb.inventory.included {
         let changed = update_graph(&mut receiver.graph, &hb, now)?;
         let changed = changed || receiver.inventory != Some(hb.inventory.revision) || new_generation || is_new;
@@ -200,7 +201,7 @@ async fn heartbeat(
         receiver.projection_generation = receiver.projection_generation.checked_add(1)
             .ok_or_else(|| ApiError::conflict("Inventory generation exhausted"))?;
         project_inventory(&mut tx, &hb, &receiver).await?;
-        observe_drive_removals(&mut tx, &hb, &receiver.graph, &prior_devices, now).await?;
+        observe_drive_removals(&mut tx, &hb, &receiver.graph, &prior_devices, &removal_watches, now).await?;
         receiver.inventory_updated_at = Some(now);
     }
     let graph_known = receiver.inventory == Some(hb.inventory.revision);
@@ -346,6 +347,7 @@ async fn observe_drive_removals(
     hb: &Heartbeat,
     graph: &Graph,
     prior_devices: &[Resource],
+    removal_watches: &BTreeMap<String,(String,String)>,
     now: i64,
 ) -> ApiResult<()> {
     for resource in prior_devices {
@@ -353,34 +355,98 @@ async fn observe_drive_removals(
         let Some(removal) = hb.tombstones.iter().find(|t|
             t.entity_type == "resource" && t.entity_id == resource.resource_id
         ) else { continue; };
+        if !recent_inventory_observation(&removal.observed_at, now) { continue; }
+        let Some((prefix, kind, classification)) = removal_identity(resource) else { continue; };
         let id = object_id(&hb.node_id, resource)?;
         crate::attention::observe_condition(tx, &crate::attention::Condition {
-            key: format!("drive_removal:{}:{id}", hb.node_id),
-            kind: "drive_removal".into(), node_id: hb.node_id.clone(), object_id: Some(id),
+            key: format!("{prefix}:{}:{id}", hb.node_id),
+            kind: kind.into(), node_id: hb.node_id.clone(), object_id: Some(id),
             status: "open".into(), severity: "warning".into(), observation_state: "ok".into(),
-            summary: "Physical drive removed from this host; administrator review required".into(),
+            summary: if kind == "drive_removal" { "Physical drive removed from this host; cause unknown" }
+                else { "Previously observed NFS mount removed from this host; cause unknown" }.into(),
             evidence: json!({"resource_id":resource.resource_id,"boot_id":hb.boot_id,
+                "usb_watch_id":removal_watches.get(&resource.resource_id).map(|(id,_)|id),
+                "connection_epoch":removal_watches.get(&resource.resource_id).map(|(_,epoch)|epoch),
+                "agent_session_id":hb.agent_session_id,"classification":classification,"cause":"unknown",
                 "device":resource.attributes,"removal":removal,"received_at":store::timestamp(now),
-                "reason":"explicit_physical_device_removal"}),
+                "reason":if kind=="drive_removal" {"explicit_physical_device_removal"} else {"explicit_nfs_mount_removal"}}),
         }, now).await?;
     }
     // Only an accepted explicit upsert can establish that the same resource
     // identity is present again; it is not proof of hardware health.
     for resource in &hb.resources {
-        if resource.resource_type != "physical_device"
-            || !graph.resources.contains_key(&resource.resource_id)
-            || prior_devices.iter().any(|old| old.resource_id == resource.resource_id) { continue; }
+        let Some((prefix, kind, classification)) = removal_identity(resource) else { continue; };
+        if !graph.resources.contains_key(&resource.resource_id)
+            || !recent_inventory_observation(&resource.observed_at, now)
+            || !graph.acquisition.get(&format!("resource:{}",resource.resource_id)).is_some_and(|a|
+                acquisition_matches(a,hb) && a["observed_at"] == resource.observed_at) { continue; }
         let id = object_id(&hb.node_id, resource)?;
         crate::attention::observe_condition(tx, &crate::attention::Condition {
-            key: format!("drive_removal:{}:{id}", hb.node_id),
-            kind: "drive_removal".into(), node_id: hb.node_id.clone(), object_id: Some(id),
+            key: format!("{prefix}:{}:{id}", hb.node_id),
+            kind: kind.into(), node_id: hb.node_id.clone(), object_id: Some(id),
             status: "resolved".into(), severity: "warning".into(), observation_state: "ok".into(),
-            summary: "Physical drive resource observed again".into(),
+            summary: if kind=="drive_removal" {"Physical drive resource observed again"}
+                else {"NFS mount resource observed again; server accessibility is separate"}.into(),
             evidence: json!({"resource_id":resource.resource_id,"boot_id":hb.boot_id,
+                "agent_session_id":hb.agent_session_id,"classification":classification,
                 "observed_at":resource.observed_at,"received_at":store::timestamp(now)}),
         }, now).await?;
     }
     Ok(())
+}
+
+async fn removal_watch_correlations(
+    tx: &mut Transaction<'_, Sqlite>, hb: &Heartbeat, graph: &Graph, resources: &[Resource],
+) -> ApiResult<BTreeMap<String,(String,String)>> {
+    let mut result = BTreeMap::new();
+    for resource in resources.iter().filter(|r|r.resource_type=="physical_device"
+        && hb.tombstones.iter().any(|t|t.entity_type=="resource" && t.entity_id==r.resource_id)) {
+        let edges: Vec<_> = graph.relationships.values().filter(|r|r.relation=="attached_to"
+            && r.to_resource_id==resource.resource_id).collect();
+        if edges.len()!=1 { continue; }
+        let edge=edges[0];
+        let Some(driver)=graph.resources.get(&edge.from_resource_id) else {continue;};
+        if driver.resource_type!="controller" || driver.attributes.get("source")!=Some(&json!("IOBlockStorageDriver"))
+            || driver.attributes.get("scope")!=Some(&json!("driver"))
+            || resource.attributes.get("source")!=Some(&json!("diskutil.list.physical"))
+            || graph.relationships.values().filter(|r|r.relation=="attached_to" && r.from_resource_id==driver.resource_id).count()!=1 {
+            continue;
+        }
+        let attrs=serde_json::to_value(&edge.attributes).map_err(|_|ApiError::unavailable())?;
+        if attrs["source"]!="derived.storage" || attrs["state"]!="resolved"
+            || attrs["boot_id"].as_str().is_some_and(|s|s!=hb.boot_id)
+            || attrs["agent_session_id"].as_str().is_some_and(|s|s!=hb.agent_session_id)
+            || driver.attributes.get("observed_boot_id").and_then(Value::as_str).is_some_and(|s|s!=hb.boot_id)
+            || driver.attributes.get("observed_agent_session").and_then(Value::as_str).is_some_and(|s|s!=hb.agent_session_id)
+            || ![format!("resource:{}",driver.resource_id),format!("relationship:{}",edge.relationship_id)]
+                .iter().all(|key|graph.acquisition.get(key).is_some_and(|a|acquisition_matches(a,hb))) {
+            continue;
+        }
+        if let Some(watch)=crate::device_watch::watch_for_driver(tx,hb,&driver.resource_id).await? {
+            result.insert(resource.resource_id.clone(),watch);
+        }
+    }
+    Ok(result)
+}
+
+fn acquisition_matches(acquisition: &Value, hb: &Heartbeat) -> bool {
+    acquisition["boot_id"] == hb.boot_id
+        && acquisition["agent_generation"] == hb.agent_generation.to_string()
+        && acquisition["agent_session_id"] == hb.agent_session_id
+}
+
+fn recent_inventory_observation(observed_at: &str, now: i64) -> bool {
+    millis(observed_at).is_ok_and(|at| at <= now && now.saturating_sub(at) <= 90_000)
+}
+
+fn removal_identity(resource: &Resource) -> Option<(&'static str, &'static str, &'static str)> {
+    if resource.resource_type == "physical_device" {
+        Some(("drive_removal", "drive_removal", "physical_drive_removed"))
+    } else if resource.resource_type == "mount" && matches!(
+        resource.attributes.get("filesystem_type").and_then(Value::as_str), Some("nfs" | "nfs4")
+    ) {
+        Some(("mount_removal", "filesystem", "nfs_mount_removed"))
+    } else { None }
 }
 
 fn object_id(node: &str, resource: &Resource) -> ApiResult<String> {
@@ -507,7 +573,7 @@ fn metric_name(metric: &Metric) -> &str {
         "storage.filesystem.total_bytes" | "storage.apfs.container_capacity_bytes" => "capacity_bytes",
         "storage.filesystem.free_bytes" | "storage.apfs.container_free_bytes" => "free_bytes",
         "storage.filesystem.available_bytes" => "available_bytes",
-        "storage.filesystem.block_accounted_used_bytes" | "storage.apfs.volume_used_bytes" | "orchard.apfs.container_used_bytes" => "used_bytes",
+        "storage.filesystem.block_accounted_used_bytes" | "storage.apfs.volume_used_bytes" | "cider.apfs.container_used_bytes" | "orchard.apfs.container_used_bytes" => "used_bytes",
         "storage.filesystem.reported_files" => "files_total",
         "storage.filesystem.reported_free_files" => "files_free",
         "storage.apfs.volume_quota_bytes" => "apfs_quota_bytes",
@@ -543,7 +609,7 @@ fn apfs_used(collection: &Collection) -> Option<Metric> {
     let free = collection.metrics.iter().find(|m| m.name == "storage.apfs.container_free_bytes" && m.availability == "available" && m.freshness.as_deref() == Some("live"))?;
     let used = unsigned(total.value.as_ref()?)?.checked_sub(unsigned(free.value.as_ref()?)?)?;
     let mut metric = total.clone();
-    metric.name = "orchard.apfs.container_used_bytes".into();
+    metric.name = "cider.apfs.container_used_bytes".into();
     metric.value = Some(json!(used.to_string()));
     metric.source_field = Some("server: container_capacity_bytes - container_free_bytes".into());
     Some(metric)

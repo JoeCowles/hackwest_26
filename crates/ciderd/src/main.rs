@@ -40,7 +40,7 @@ enum Mode {
         #[arg(long)]
         node_id: Option<String>,
     },
-    /// Enroll with Orchard and securely store the matching node identity and credential.
+    /// Enroll with Cider and securely store the matching node identity and credential.
     EnrollServer {
         #[arg(long)]
         config: PathBuf,
@@ -96,7 +96,7 @@ fn execute(cli: Cli) -> Result<()> {
         Mode::EnrollServer { config, name, enrollment_token_file } => {
             let config = Config::load(&config)?;
             let rt = make_runtime()?;
-            let result = rt.block_on(ciderd::orchard::enroll(&config, &name, &enrollment_token_file));
+            let result = rt.block_on(ciderd::cider::enroll(&config, &name, &enrollment_token_file));
             rt.shutdown_timeout(Duration::from_secs(1));
             println!("Enrolled node {}. Identity and credential stored with owner-only permissions.", result?);
         }

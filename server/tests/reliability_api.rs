@@ -3,7 +3,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use orchard_server::{api, read_api, store::AppState};
+use cider_server::{api, read_api, store::AppState};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -83,7 +83,7 @@ async fn reliability_read_contract_is_authenticated_and_unknown_without_sources(
 
 #[tokio::test]
 async fn exact_findings_pages_are_frozen_filtered_and_credential_bound() {
-    use orchard_server::reliability::{SourceIdentity, SourceState};
+    use cider_server::reliability::{SourceIdentity, SourceState};
     use uuid::Uuid;
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::open(&dir.path().join("test.sqlite"), "admin")
@@ -94,7 +94,7 @@ async fn exact_findings_pages_are_frozen_filtered_and_credential_bound() {
     let object = Uuid::new_v4().to_string();
     let source = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
-    sqlx::query("INSERT INTO nodes(node_id,name,agent_json,credential_hash,enrolled_at,last_seen_at) VALUES (?,'test','{}',?,0,?)").bind(&node).bind(orchard_server::store::fingerprint(b"node-credential")).bind(now).execute(&state.db).await.unwrap();
+    sqlx::query("INSERT INTO nodes(node_id,name,agent_json,credential_hash,enrolled_at,last_seen_at) VALUES (?,'test','{}',?,0,?)").bind(&node).bind(cider_server::store::fingerprint(b"node-credential")).bind(now).execute(&state.db).await.unwrap();
     let model = SourceState::new(SourceIdentity {
         source_id: source.clone(),
         node_id: node.clone(),
@@ -109,7 +109,7 @@ async fn exact_findings_pages_are_frozen_filtered_and_credential_bound() {
     for (index, status) in ["open", "resolved"].iter().enumerate() {
         let id = Uuid::new_v4().to_string();
         let at = now - ((2 - index) as i64) * 1000;
-        let row = json!({"finding_id":id,"source_id":source,"node_id":node,"object_id":object,"status":status,"first_seen_at":orchard_server::store::timestamp(at),"evidence":{"counter_start":"1844674407370955161600","counter_end":"1844674407370955161601","delta":"1"}});
+        let row = json!({"finding_id":id,"source_id":source,"node_id":node,"object_id":object,"status":status,"first_seen_at":cider_server::store::timestamp(at),"evidence":{"counter_start":"1844674407370955161600","counter_end":"1844674407370955161601","delta":"1"}});
         sqlx::query("INSERT INTO reliability_findings(finding_id,source_id,node_id,object_id,status,first_seen_at,updated_at,finding_json) VALUES (?,?,?,?,?,?,?,?)").bind(&id).bind(&source).bind(&node).bind(&object).bind(status).bind(at).bind(now).bind(row.to_string()).execute(&state.db).await.unwrap();
         original.push(row);
     }

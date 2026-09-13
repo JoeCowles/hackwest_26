@@ -1,5 +1,5 @@
 {
-  description = "Orchard Cluster Console development environment";
+  description = "Cider Cluster Console development environment";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 

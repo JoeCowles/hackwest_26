@@ -4,7 +4,7 @@ use axum::{Json, Router, extract::{OriginalUri, Path, Query, State}, http::{Head
 use chrono::Utc;
 use serde_json::{json, Value};
 use sqlx::{Row, sqlite::SqliteRow};
-use std::{collections::{BTreeMap, BTreeSet, HashMap}, path::Path as FilePath, sync::{Arc, Mutex}};
+use std::{collections::{BTreeMap, BTreeSet, HashMap}, sync::{Arc, Mutex}};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
@@ -21,6 +21,8 @@ const READ_ROUTES: &[&str] = &[
     "/api/v1/objects/{object_id}/history", "/api/v1/objects/{object_id}/capacity-forecast",
 ];
 const DIMENSIONS: &[&str] = &["availability", "capacity", "performance", "media_health", "filesystem_integrity", "security_activity", "recovery_readiness", "telemetry_freshness"];
+const READ_REQUESTS_PER_MINUTE: u64 = 240;
+const READ_BURST: u64 = 40;
 type Parameters = BTreeMap<String, String>;
 
 #[derive(Clone)]
@@ -37,28 +39,6 @@ struct Page {
 struct Snapshot {
     time: i64, change: String, nodes: Vec<Value>, objects: Vec<Value>,
     filesystems: Vec<Value>, events: Vec<Value>, cluster: Value, disks: BTreeMap<String, crate::disk_view::DiskIndex>,
-}
-
-pub fn write_viewer_file(directory: &FilePath, token: &str) -> anyhow::Result<()> {
-    use std::{fs, io::Write};
-    let path = directory.join("viewer-token");
-    if let Ok(meta) = fs::symlink_metadata(&path) {
-        anyhow::ensure!(meta.file_type().is_file(), "Viewer credential must be a regular file");
-    }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)] {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&path)?;
-    #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    file.write_all(token.as_bytes())?;
-    file.sync_all()?;
-    Ok(())
 }
 
 pub fn router(app: AppState) -> Router {
@@ -144,8 +124,7 @@ async fn authorize(state: &ReadState, headers: &HeaderMap) -> ApiResult<String> 
     let token = headers.get("authorization").and_then(|h| h.to_str().ok()).and_then(|h| h.strip_prefix("Bearer ")).unwrap_or("");
     let hash = store::fingerprint(token.as_bytes());
     let admin = bool::from(hash.as_bytes().ct_eq(state.app.admin_hash.as_bytes()));
-    let viewer_hash = store::fingerprint(state.app.viewer_token.as_bytes());
-    let viewer = bool::from(hash.as_bytes().ct_eq(viewer_hash.as_bytes())) && Utc::now().timestamp_millis() < state.app.viewer_expires_at;
+    let viewer = state.app.is_viewer(&hash);
     if !admin && !viewer {
         let node: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE credential_hash=? AND revoked_at IS NULL").bind(&hash).fetch_one(&state.app.db).await?;
         return Err(if node > 0 { ApiError::new(StatusCode::FORBIDDEN, "forbidden", "Node credentials cannot read cluster data") }
@@ -153,8 +132,8 @@ async fn authorize(state: &ReadState, headers: &HeaderMap) -> ApiResult<String> 
     }
     let now = Utc::now().timestamp_millis();
     let mut budgets = state.budgets.lock().map_err(|_| unavailable("Read budget unavailable"))?;
-    let budget = budgets.entry(hash.clone()).or_insert((20.0, now));
-    budget.0 = (budget.0 + (now - budget.1).max(0) as f64 / 500.0).min(20.0);
+    let budget = budgets.entry(hash.clone()).or_insert((READ_BURST as f64, now));
+    budget.0 = (budget.0 + (now - budget.1).max(0) as f64 * READ_REQUESTS_PER_MINUTE as f64 / 60_000.0).min(READ_BURST as f64);
     budget.1 = now;
     if budget.0 < 1.0 { return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Read budget exhausted")); }
     budget.0 -= 1.0;
@@ -176,6 +155,7 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         if query.insert(key.clone(), val).is_some() { return Err(query_error(&key, "Duplicate query parameter")); }
     }
     let path = uri.path();
+    release_cursor(state, headers, path, &query, &owner)?;
     let parts: Vec<_> = path.trim_matches('/').split('/').collect();
     let resource = parts.get(2).copied().unwrap_or("");
     if resource == "reliability" {
@@ -243,10 +223,10 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         ("cluster", None, _) => snapshot.cluster.clone(),
         ("capabilities", None, _) => json!({
             "api_version":"1","service_version":env!("CARGO_PKG_VERSION"),"heartbeat_interval_seconds":5,
-            "availability_thresholds_seconds":{"degraded":30,"offline":90},"poll_interval_seconds":5,"hidden_poll_interval_seconds":30,
+            "availability_thresholds_seconds":{"degraded":30,"offline":90},"poll_interval_seconds":3,"hidden_poll_interval_seconds":30,
             "implemented_read_routes":READ_ROUTES,"features":{"current_inventory":true,"physical_disks":true,"typed_storage_topology":true,"hardware_models":true,"historical_inventory":false,"events":true,"storage_activity_detection":true,"filesystem_nfs_rule_detection":true,"drive_reliability":true,"reliability_findings":true,"replacement_forecasts":false,"findings":true,"alerts":true,"twilio_notifications":true,"notification_configuration":"administrator_dashboard","nfs_user_quotas":true,"diagnostics_readiness":true,"capacity_forecasts":true,"sse":false,"metric_history":true,"prometheus":false,"openapi":false},
-            "viewer_credential_expires_at":store::timestamp(state.app.viewer_expires_at),"viewer_scope":"telemetry:read","browser_transport":"same_origin",
-            "limits":{"default_page_size":100,"maximum_page_size":500,"cursor_ttl_seconds":300,"read_requests_per_minute":120,"read_burst":20}
+            "viewer_credential_expires_at":state.app.viewer_expires_at.map(store::timestamp),"viewer_scope":"telemetry:read","browser_transport":"same_origin",
+            "limits":{"default_page_size":100,"maximum_page_size":500,"cursor_ttl_seconds":300,"read_requests_per_minute":READ_REQUESTS_PER_MINUTE,"read_burst":READ_BURST}
         }),
         ("nodes", Some(id), Some("inventory" | "disks")) => {
             let node = snapshot.nodes.iter().find(|n| n["node_id"] == id).ok_or_else(not_found)?;
@@ -580,22 +560,57 @@ fn validate_enum(query: &Parameters, key: &str, choices: &[&str]) -> ApiResult<(
 }
 fn matches_filter(item: &Value, key: &str, query: &Parameters) -> bool { query.get(key).is_none_or(|v| item[key].as_str() == Some(v.as_str())) }
 fn health_filter(item: &Value, query: &Parameters) -> bool { query.get("health").is_none_or(|v| item["health"]["overall"].as_str() == Some(v.as_str())) }
-fn page(state: &ReadState, path: &str, query: &Parameters, owner: &str, cursor: &str, limit: usize, request_id: &str) -> ApiResult<Response> {
+struct Cursor<'a> { key: &'a str, expires: i64, offset: usize }
+
+fn parse_cursor(cursor: &str) -> ApiResult<Cursor<'_>> {
     let parts: Vec<_> = cursor.split('.').collect();
     if parts.len() != 3 || Uuid::parse_str(parts[0]).is_err() { return Err(query_error("cursor", "Malformed cursor")); }
     let expires: i64 = parts[1].parse().map_err(|_| query_error("cursor", "Malformed cursor"))?;
     let offset: usize = parts[2].parse().map_err(|_| query_error("cursor", "Malformed cursor"))?;
-    if expires <= Utc::now().timestamp_millis() { return Err(ApiError::new(StatusCode::GONE, "cursor_expired", "Start a new traversal")); }
+    Ok(Cursor { key: parts[0], expires, offset })
+}
+
+fn cursor_matches(page: &Page, path: &str, query: &Parameters, owner: &str, cursor: &Cursor<'_>, limit: usize) -> bool {
+    page.path == path && page.query == *query && page.owner == owner && page.expires == cursor.expires
+        && cursor.offset > 0 && cursor.offset < page.values.len() && cursor.offset % limit == 0
+}
+
+/// Automatic first-page followers explicitly relinquish an obsolete traversal.
+/// Validate before removal; malformed or foreign cursors never release a page.
+fn release_cursor(state: &ReadState, headers: &HeaderMap, path: &str, query: &Parameters, owner: &str) -> ApiResult<()> {
+    let mut values = headers.get_all("x-cider-release-cursor").iter();
+    let Some(value) = values.next() else { return Ok(()); };
+    if values.next().is_some() || query.contains_key("cursor") {
+        return Err(query_error("X-Cider-Release-Cursor", "Send one release cursor only with a new first-page read"));
+    }
+    let cursor = parse_cursor(value.to_str().map_err(|_| query_error("X-Cider-Release-Cursor", "Malformed cursor"))?)?;
+    let limit = match query.get("limit") {
+        Some(n) => n.parse::<usize>().ok().filter(|n| (1..=500).contains(n)).ok_or_else(|| query_error("limit", "Expected 1-500"))?,
+        None => 100,
+    };
+    if cursor.offset == 0 || cursor.offset % limit != 0 { return Err(query_error("X-Cider-Release-Cursor", "Cursor does not match this traversal")); }
+    let mut pages = state.pages.lock().map_err(|_| unavailable("Pagination unavailable"))?;
+    let Some(page) = pages.get(cursor.key) else { return Ok(()); };
+    if !cursor_matches(page, path, query, owner, &cursor, limit) {
+        return Err(query_error("X-Cider-Release-Cursor", "Cursor does not match this traversal"));
+    }
+    if cursor.expires > Utc::now().timestamp_millis() { pages.remove(cursor.key); }
+    Ok(())
+}
+
+fn page(state: &ReadState, path: &str, query: &Parameters, owner: &str, cursor: &str, limit: usize, request_id: &str) -> ApiResult<Response> {
+    let cursor = parse_cursor(cursor)?;
+    if cursor.expires <= Utc::now().timestamp_millis() { return Err(ApiError::new(StatusCode::GONE, "cursor_expired", "Start a new traversal")); }
     let page = {
         let pages = state.pages.lock().map_err(|_| unavailable("Pagination unavailable"))?;
-        pages.get(parts[0]).cloned().ok_or_else(|| ApiError::new(StatusCode::GONE, "cursor_expired", "Snapshot is no longer available; start a new traversal"))?
+        pages.get(cursor.key).cloned().ok_or_else(|| ApiError::new(StatusCode::GONE, "cursor_expired", "Snapshot is no longer available; start a new traversal"))?
     };
-    if page.path != path || page.query != *query || page.owner != owner || page.expires != expires || offset == 0 || offset >= page.values.len() || offset % limit != 0 {
+    if !cursor_matches(&page, path, query, owner, &cursor, limit) {
         return Err(query_error("cursor", "Cursor does not match this traversal"));
     }
-    let end = offset.saturating_add(limit).min(page.values.len());
-    let next = (end < page.values.len()).then(|| format!("{}.{expires}.{end}", parts[0]));
-    Ok(response(json!(&page.values[offset..end]), page.time, &page.change, next, request_id, &page.metadata))
+    let end = cursor.offset.saturating_add(limit).min(page.values.len());
+    let next = (end < page.values.len()).then(|| format!("{}.{}.{end}", cursor.key, cursor.expires));
+    Ok(response(json!(&page.values[cursor.offset..end]), page.time, &page.change, next, request_id, &page.metadata))
 }
 
 pub(crate) fn unknown(kind: &str, unit: &str) -> Value {
@@ -1165,6 +1180,86 @@ mod pagination_tests {
         (directory,ReadState{app,pages:Default::default(),budgets:Default::default()},headers)
     }
     fn cached(bytes:usize)->Page {Page{owner:String::new(),path:String::new(),query:Parameters::new(),expires:Utc::now().timestamp_millis()+300_000,time:0,change:"0".into(),values:Arc::new(vec![]),bytes,metadata:json!({})}}
+    async fn next_cursor(state:&ReadState,headers:&HeaderMap,uri:&Uri)->String {
+        let response=dispatch(state,headers,uri,"test").await.unwrap();
+        let bytes=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        let body:Value=serde_json::from_slice(&bytes).unwrap();
+        body["meta"]["next_cursor"].as_str().unwrap().to_owned()
+    }
+    #[tokio::test]
+    async fn automatic_refresh_releases_only_its_previous_snapshot_and_keeps_manual_pages() {
+        let (_directory,state,headers)=fixture(2).await;
+        let uri:Uri="/api/v1/nodes?limit=1".parse().unwrap();
+        let manual=next_cursor(&state,&headers,&uri).await;
+        let mut automatic=next_cursor(&state,&headers,&uri).await;
+        for _ in 0..140 {
+            // This test isolates cache capacity from the independent read budget.
+            state.budgets.lock().unwrap().clear();
+            let previous=automatic.clone();
+            let mut following=headers.clone();
+            following.insert("x-cider-release-cursor",previous.parse().unwrap());
+            automatic=next_cursor(&state,&following,&uri).await;
+            assert_eq!(state.pages.lock().unwrap().len(),2);
+            let gone:Uri=format!("/api/v1/nodes?limit=1&cursor={previous}").parse().unwrap();
+            assert_eq!(dispatch(&state,&headers,&gone,"test").await.unwrap_err().status,StatusCode::GONE);
+        }
+        let frozen:Uri=format!("/api/v1/nodes?limit=1&cursor={manual}").parse().unwrap();
+        assert!(dispatch(&state,&headers,&frozen,"test").await.is_ok());
+    }
+    #[tokio::test]
+    async fn cursor_release_rejects_foreign_mismatched_malformed_and_paged_requests() {
+        let (_directory,state,headers)=fixture(2).await;
+        let uri:Uri="/api/v1/nodes?limit=1".parse().unwrap();
+        let cursor=next_cursor(&state,&headers,&uri).await;
+        let mut following=headers.clone();
+        following.insert("x-cider-release-cursor",cursor.parse().unwrap());
+        let mut foreign=following.clone();
+        foreign.insert("authorization",format!("Bearer {}",state.app.viewer_token).parse().unwrap());
+        for (headers,path) in [
+            (&foreign,"/api/v1/nodes?limit=1".to_owned()),
+            (&following,"/api/v1/events?limit=1".to_owned()),
+            (&following,"/api/v1/nodes?limit=2".to_owned()),
+            (&following,format!("/api/v1/nodes?limit=1&cursor={cursor}")),
+        ] {
+            assert_eq!(dispatch(&state,headers,&path.parse().unwrap(),"test").await.unwrap_err().status,StatusCode::BAD_REQUEST);
+            assert_eq!(state.pages.lock().unwrap().len(),1);
+        }
+        following.insert("x-cider-release-cursor","malformed".parse().unwrap());
+        assert_eq!(dispatch(&state,&following,&uri,"test").await.unwrap_err().status,StatusCode::BAD_REQUEST);
+        following.insert("x-cider-release-cursor",cursor.parse().unwrap());
+        following.append("x-cider-release-cursor",cursor.parse().unwrap());
+        assert_eq!(dispatch(&state,&following,&uri,"test").await.unwrap_err().status,StatusCode::BAD_REQUEST);
+        let frozen:Uri=format!("/api/v1/nodes?limit=1&cursor={cursor}").parse().unwrap();
+        assert!(dispatch(&state,&headers,&frozen,"test").await.is_ok());
+    }
+    #[tokio::test]
+    async fn expired_or_missing_released_cursors_do_not_block_refresh() {
+        let (_directory,state,headers)=fixture(2).await;
+        let uri:Uri="/api/v1/nodes?limit=1".parse().unwrap();
+        let cursor=next_cursor(&state,&headers,&uri).await;
+        let key=cursor.split('.').next().unwrap();
+        state.pages.lock().unwrap().get_mut(key).unwrap().expires=0;
+        let mut following=headers.clone();
+        following.insert("x-cider-release-cursor",format!("{key}.0.1").parse().unwrap());
+        next_cursor(&state,&following,&uri).await;
+        following.insert("x-cider-release-cursor",format!("{}.{}.1",Uuid::new_v4(),Utc::now().timestamp_millis()+300_000).parse().unwrap());
+        next_cursor(&state,&following,&uri).await;
+    }
+    #[tokio::test]
+    async fn read_budget_advertises_and_enforces_the_two_tab_allowance() {
+        let (_directory,state,headers)=fixture(0).await;
+        let response=dispatch(&state,&headers,&"/api/v1/capabilities".parse().unwrap(),"test").await.unwrap();
+        let bytes=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        let body:Value=serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["data"]["limits"]["read_requests_per_minute"],240);
+        assert_eq!(body["data"]["limits"]["read_burst"],40);
+        let owner=store::fingerprint(ADMIN.as_bytes());
+        assert_eq!(state.budgets.lock().unwrap()[&owner].0,39.0);
+        state.budgets.lock().unwrap().insert(owner.clone(),(0.0,Utc::now().timestamp_millis()+60_000));
+        assert_eq!(authorize(&state,&headers).await.unwrap_err().status,StatusCode::TOO_MANY_REQUESTS);
+        state.budgets.lock().unwrap().insert(owner,(0.0,Utc::now().timestamp_millis()-300));
+        assert!(authorize(&state,&headers).await.is_ok(),"Four tokens per second permit a read after 300ms");
+    }
     #[tokio::test]
     async fn pagination_retains_traversal_and_serialized_byte_bounds() {
         let (_directory,state,headers)=fixture(2).await;

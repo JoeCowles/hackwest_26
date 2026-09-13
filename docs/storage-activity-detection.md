@@ -9,7 +9,7 @@ part of this work.
 
 ## Product boundary
 
-Orchard identifies sustained increases in native driver read or write activity
+Cider identifies sustained increases in native driver read or write activity
 against that source's own observed baseline. A finding supplies dated evidence for
 the administrator; it does not establish unauthorized file access or compromise.
 The rule uses accepted schema-2 ciderd `iokit.block` byte counters independently

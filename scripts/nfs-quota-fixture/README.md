@@ -13,19 +13,19 @@ image and fails to boot. Use a 12 GiB sparse disk (about 1.2 GiB initially alloc
 Example, with a unique dedicated VM and an empty temporary share:
 
 ```sh
-mkdir -p /tmp/orchard-quota-empty
+mkdir -p /tmp/cider-quota-empty
 podman machine init --cpus 1 --memory 1024 --disk-size 12 --rootful \
-  --volume /tmp/orchard-quota-empty:/mnt/fixture-share:ro orchard-nfs-quota-test
-podman machine start orchard-nfs-quota-test
-podman machine ssh orchard-nfs-quota-test sudo modprobe -a loop quota_v2
+  --volume /tmp/cider-quota-empty:/mnt/fixture-share:ro cider-nfs-quota-test
+podman machine start cider-nfs-quota-test
+podman machine ssh cider-nfs-quota-test sudo modprobe -a loop quota_v2
 export CONTAINER_ENGINE=podman
-export PODMAN_CONNECTION=orchard-nfs-quota-test-root
+export PODMAN_CONNECTION=cider-nfs-quota-test-root
 export CIDERD_BIN="$PWD/target/debug/ciderd"
 scripts/nfs-quota-fixture/run.sh up
 scripts/nfs-quota-fixture/run.sh verify
 scripts/nfs-quota-fixture/run.sh down
-podman machine stop orchard-nfs-quota-test
-podman machine rm -f orchard-nfs-quota-test
+podman machine stop cider-nfs-quota-test
+podman machine rm -f cider-nfs-quota-test
 ```
 
 Do not substitute an existing personal VM for the dedicated fixture VM. Start

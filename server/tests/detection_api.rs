@@ -4,7 +4,7 @@ use axum::{
     http::Request,
 };
 use chrono::Utc;
-use orchard_server::{api, read_api, store::AppState};
+use cider_server::{api, read_api, store::AppState};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -75,7 +75,7 @@ impl Harness {
             .await
     }
     async fn source(&self) -> (String, String, String) {
-        use orchard_server::detection::{SourceIdentity, SourceState};
+        use cider_server::detection::{SourceIdentity, SourceState};
         let node = Uuid::new_v4().to_string();
         let source = Uuid::new_v4().to_string();
         let object = Uuid::new_v4().to_string();
@@ -107,7 +107,7 @@ impl Harness {
         at: i64,
     ) -> Value {
         let finding = json!({"finding_id":Uuid::new_v4().to_string(),"source_id":source,"node_id":node,"object_id":object,
-            "status":status,"first_seen_at":orchard_server::store::timestamp(at),
+            "status":status,"first_seen_at":cider_server::store::timestamp(at),
             "evidence":{"counter_start":"1844674407370955161600","counter_end":"1844674407370995161600"}});
         sqlx::query("INSERT INTO detection_findings(finding_id,source_id,node_id,object_id,status,first_seen_at,updated_at,ended_at,finding_json) VALUES (?,?,?,?,?,?,?,NULL,?)")
             .bind(finding["finding_id"].as_str().unwrap()).bind(source).bind(node).bind(object).bind(status).bind(at).bind(at).bind(finding.to_string())
@@ -151,7 +151,7 @@ async fn detection_reads_use_existing_roles_envelopes_and_explicit_empty_coverag
     assert_eq!(capabilities["data"]["features"]["alerts"], true);
     let node = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO nodes(node_id,name,agent_json,credential_hash,enrolled_at) VALUES (?,'node','{}',?,0)")
-        .bind(node).bind(orchard_server::store::fingerprint(b"node-token")).execute(&h.state.db).await.unwrap();
+        .bind(node).bind(cider_server::store::fingerprint(b"node-token")).execute(&h.state.db).await.unwrap();
     assert_eq!(
         h.request("GET", "/api/v1/findings", "node-token", Value::Null, None)
             .await
@@ -275,7 +275,7 @@ async fn findings_keep_old_open_episodes_exact_evidence_and_frozen_pages() {
     let (_, filtered) = h
         .get(&format!(
             "/api/v1/findings?object_id={object}&from={}",
-            orchard_server::store::timestamp(now - 500)
+            cider_server::store::timestamp(now - 500)
         ))
         .await;
     assert_eq!(filtered["data"], json!([newer]));
@@ -349,8 +349,8 @@ async fn only_current_open_findings_raise_security_warning() {
             .unwrap();
     let mut summary: Value = serde_json::from_str(&stored).unwrap();
     summary["episode"] = json!({"state":"open","finding_id":Uuid::new_v4().to_string(),"elevated_seconds":120,"recovery_seconds":0});
-    summary["observation"] = json!({"state":"current","reason":null,"observed_at":orchard_server::store::timestamp(now),
-        "received_at":orchard_server::store::timestamp(now),"age_seconds":0,"stale_after_seconds":15,"rate_bytes_per_second":8_000_000});
+    summary["observation"] = json!({"state":"current","reason":null,"observed_at":cider_server::store::timestamp(now),
+        "received_at":cider_server::store::timestamp(now),"age_seconds":0,"stale_after_seconds":15,"rate_bytes_per_second":8_000_000});
     for (state, expected) in [
         ("current", "warning"),
         ("unavailable", "unknown"),

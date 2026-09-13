@@ -12,43 +12,46 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 pub const EXPORTS: &str = "/etc/exports";
-const BEGIN_MARK: &str = "# >>> orchard-nfs managed block >>>";
-const END_MARK: &str = "# <<< orchard-nfs managed block <<<";
+const BEGIN_MARK: &str = "# >>> cider-nfs managed block >>>";
+const END_MARK: &str = "# <<< cider-nfs managed block <<<";
+// Compatibility only: existing installations must not duplicate their exports.
+const LEGACY_BEGIN_MARK: &str = "# >>> orchard-nfs managed block >>>";
+const LEGACY_END_MARK: &str = "# <<< orchard-nfs managed block <<<";
 
 /// Return `content` with the managed block removed. Everything else is untouched.
 pub fn strip_managed_block(content: &str) -> Result<String> {
     let mut out = String::with_capacity(content.len());
-    let mut skipping = false;
+    let mut expected_end = None;
     let mut seen = false;
     for original in content.split_inclusive('\n') {
         let line = original.trim_end_matches(['\r', '\n']);
         ensure!(
-            !matches!(line.trim(), BEGIN_MARK | END_MARK) || line == line.trim(),
+            !matches!(line.trim(), BEGIN_MARK | END_MARK | LEGACY_BEGIN_MARK | LEGACY_END_MARK) || line == line.trim(),
             "managed export markers must occupy an exact line; original exports retained"
         );
-        if line == BEGIN_MARK {
+        if matches!(line, BEGIN_MARK | LEGACY_BEGIN_MARK) {
             ensure!(
-                !seen && !skipping,
+                !seen && expected_end.is_none(),
                 "duplicate or nested managed export block; original exports retained"
             );
             seen = true;
-            skipping = true;
+            expected_end = Some(if line == BEGIN_MARK { END_MARK } else { LEGACY_END_MARK });
             continue;
         }
-        if line == END_MARK {
+        if matches!(line, END_MARK | LEGACY_END_MARK) {
             ensure!(
-                skipping,
-                "unmatched managed export block end; original exports retained"
+                expected_end == Some(line),
+                "unmatched or mixed managed export block end; original exports retained"
             );
-            skipping = false;
+            expected_end = None;
             continue;
         }
-        if !skipping {
+        if expected_end.is_none() {
             out.push_str(original);
         }
     }
     ensure!(
-        !skipping,
+        expected_end.is_none(),
         "unclosed managed export block; original exports retained"
     );
     Ok(out)
@@ -74,7 +77,7 @@ pub fn with_managed_block(content: &str, export_line: &str) -> Result<String> {
 }
 
 pub fn has_managed_block(content: &str) -> bool {
-    content.lines().any(|l| l == BEGIN_MARK)
+    content.lines().any(|l| matches!(l, BEGIN_MARK | LEGACY_BEGIN_MARK))
 }
 
 /// Count export lines that are neither blank nor comments.
@@ -88,7 +91,7 @@ pub fn active_export_lines(content: &str) -> usize {
 
 fn backup(path: &Path) -> Result<PathBuf> {
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
-    let dest = PathBuf::from(format!("{}.orchard-backup.{stamp}", path.display()));
+    let dest = PathBuf::from(format!("{}.cider-backup.{stamp}", path.display()));
     std::fs::copy(path, &dest)
         .with_context(|| format!("backing up {} to {}", path.display(), dest.display()))?;
     info!("backed up {} -> {}", path.display(), dest.display());
@@ -229,6 +232,30 @@ mod tests {
     const HAND_WRITTEN: &str = "/srv/other -ro 10.0.0.5\n";
 
     #[test]
+    fn legacy_marker_upgrade_preserves_unmanaged_exports() {
+        let legacy = format!("{HAND_WRITTEN}# >>> orchard-nfs managed block >>>\n/old -ro client\n# <<< orchard-nfs managed block <<<\n");
+        assert!(has_managed_block(&legacy));
+        assert_eq!(strip_managed_block(&legacy).unwrap(), HAND_WRITTEN);
+        let next = with_managed_block(&legacy, "/new -ro client").unwrap();
+        assert!(next.starts_with(HAND_WRITTEN));
+        assert!(next.contains(BEGIN_MARK));
+        assert!(!next.contains("/old"));
+        assert!(!next.contains("orchard-nfs"));
+    }
+
+    #[test]
+    fn mixed_marker_blocks_are_rejected_without_rewriting() {
+        for content in [
+            "# >>> orchard-nfs managed block >>>\n/old\n# <<< cider-nfs managed block <<<\n",
+            "# >>> cider-nfs managed block >>>\n/old\n# <<< orchard-nfs managed block <<<\n",
+            "# >>> orchard-nfs managed block >>>\n/old\n# <<< orchard-nfs managed block <<<\n# >>> cider-nfs managed block >>>\n/new\n# <<< cider-nfs managed block <<<\n",
+        ] {
+            assert!(strip_managed_block(content).is_err());
+            assert!(with_managed_block(content, "/new -ro client").is_err());
+        }
+    }
+
+    #[test]
     fn strip_removes_only_managed_block() {
         let content = format!("{HAND_WRITTEN}{BEGIN_MARK}\n/managed -ro 1.2.3.4\n{END_MARK}\n");
         assert_eq!(strip_managed_block(&content).unwrap(), HAND_WRITTEN);
@@ -294,7 +321,7 @@ mod tests {
     #[test]
     fn validator_launch_failure_restores_previous_file_or_absence() {
         let path = std::env::temp_dir().join(format!(
-            "orchard-nfs-validation-{}-{}",
+            "cider-nfs-validation-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

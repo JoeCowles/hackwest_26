@@ -1,4 +1,4 @@
-# Orchard live-console patterns
+# Cider live-console patterns
 
 ## Connection and server-backed panels
 

@@ -1,7 +1,7 @@
 # Embedded frontend dependencies
 
 These files were downloaded on 2026-09-12. Runtime assets are embedded in the
-Rust binary and served by Orchard; browsers make no requests to these sources.
+Rust binary and served by Cider; browsers make no requests to these sources.
 
 | Asset | Pinned upstream source | License |
 | --- | --- | --- |

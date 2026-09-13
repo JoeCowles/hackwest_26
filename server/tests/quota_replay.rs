@@ -5,7 +5,7 @@ use axum::{
     http::Request,
 };
 use chrono::Utc;
-use orchard_server::{api, cider_api, cider_wire, read_api, store::AppState};
+use cider_server::{api, cider_api, cider_wire, read_api, store::AppState};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -175,7 +175,7 @@ async fn recorded_real_quotas_survive_authenticated_ingestion_and_read_projectio
     .await;
     assert_eq!(code, 200);
     assert_eq!(filesystems["data"], json!([]));
-    if let Ok(path) = std::env::var("ORCHARD_QUOTA_CAPTURE") {
+    if let Ok(path) = std::env::var("CIDER_QUOTA_CAPTURE") {
         let mut capture = response;
         capture["fixture_note"] = json!(
             "Real isolated rquotad quota values replayed through authenticated ingestion with synthetic node IDs and fresh replay acquisition dates; not a live cluster capture."

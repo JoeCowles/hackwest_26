@@ -74,24 +74,33 @@ pub fn filesystem(node: &Value, object: &Value, now: i64) -> Value {
     let m=&object["latest_metrics"];
     let dead=&m["storage.nfs.mount.dead"];
     let unresponsive=&m["storage.nfs.mount.not_responding"];
+    let oldest=&m["storage.nfs.mount.oldest_request_age_seconds"];
     let current=|v:&Value|node["availability"]=="online" && object["active"]==true && v["state"]=="ok" && v["value"].is_boolean();
+    let age=if node["availability"]=="online" && object["active"]==true && oldest["state"]=="ok" {
+        oldest["value"].as_f64().or_else(||oldest["value"].as_str()?.parse::<f64>().ok())
+            .filter(|n|n.is_finite() && *n>=0.0)
+    } else {None};
     let (state,observation,reason)=if [dead,unresponsive].iter().any(|v|current(v)&&v["value"]==true) {
         ("warning","current",if current(dead)&&dead["value"]==true {"nfs_mount_reported_dead"} else {"nfs_mount_not_responding"})
-    } else if current(dead)&&current(unresponsive) {
-        ("no_current_warning","current","nfs_mount_response_flags_clear")
-    } else if node["availability"]!="online" || [dead,unresponsive].iter().any(|v|v["state"]=="stale") {
+    } else if age.is_some_and(|a|a>=30.0) {
+        ("warning","current","nfs_requests_stalled")
+    } else if current(dead)&&current(unresponsive)&&age.is_some() {
+        ("no_current_warning","current","nfs_mount_response_evidence_clear")
+    } else if node["availability"]!="online" || [dead,unresponsive,oldest].iter().any(|v|v["state"]=="stale") {
         ("unknown","stale","observation_not_current")
     } else {("unknown","unavailable","mount_response_evidence_unavailable")};
     let observed_at=if current(dead) && dead["value"]==true {dead["observed_at"].clone()}
         else if current(unresponsive) && unresponsive["value"]==true {unresponsive["observed_at"].clone()}
-        else if current(dead) && current(unresponsive) {
-            match (at(&dead["observed_at"]),at(&unresponsive["observed_at"])) {
-                (Some(a),Some(b))=>json!(crate::store::timestamp(a.min(b))),_=>Value::Null
+        else if age.is_some_and(|a|a>=30.0) {oldest["observed_at"].clone()}
+        else if current(dead) && current(unresponsive) && age.is_some() {
+            match (at(&dead["observed_at"]),at(&unresponsive["observed_at"]),at(&oldest["observed_at"])) {
+                (Some(a),Some(b),Some(c))=>json!(crate::store::timestamp(a.min(b).min(c))),_=>Value::Null
             }
         } else {Value::Null};
     let capacity=collector_check(node,Some(object),"filesystem.capacity",None,now);
     json!({"accessibility":{"state":state,"observation_state":observation,"reason":reason,
-        "observed_at":observed_at,"evidence":{"dead":dead,"not_responding":unresponsive}},
+        "observed_at":observed_at,"cause":"unknown","stalled_request_threshold_seconds":30,
+        "evidence":{"dead":dead,"not_responding":unresponsive,"oldest_request_age_seconds":oldest}},
         "capacity_collection":capacity,"integrity":"unknown"})
 }
 
@@ -214,5 +223,22 @@ mod tests {
         let mut config=host(false);config["properties"]["diagnostics_configuration"]["nfs_path_refresh_enabled"]=json!(false);
         assert_eq!(filesystem_with_configuration(&node(),&object,&[config],1000)["capacity_collection"]["state"],"disabled");
         assert_eq!(filesystem_with_configuration(&node(),&object,&[],1000)["capacity_collection"]["state"],"unknown");
+    }
+    #[test]
+    fn stalled_nfs_requests_warn_and_incomplete_clear_evidence_stays_unknown() {
+        let mut object=json!({"active":true,"kind":"nfs_mount","latest_metrics":{
+            "storage.nfs.mount.dead":{"value":false,"state":"ok","observed_at":"1970-01-01T00:00:01Z"},
+            "storage.nfs.mount.not_responding":{"value":false,"state":"ok","observed_at":"1970-01-01T00:00:01Z"},
+            "storage.nfs.mount.oldest_request_age_seconds":{"value":"45","state":"ok","observed_at":"1970-01-01T00:00:02Z"}}});
+        let out=filesystem(&node(),&object,3000);
+        assert_eq!(out["accessibility"]["state"],"warning");
+        assert_eq!(out["accessibility"]["reason"],"nfs_requests_stalled");
+        assert_eq!(out["accessibility"]["observed_at"],"1970-01-01T00:00:02Z");
+        object["latest_metrics"]["storage.nfs.mount.oldest_request_age_seconds"]["state"]=json!("stale");
+        assert_eq!(filesystem(&node(),&object,3000)["accessibility"]["state"],"unknown");
+        object["latest_metrics"].as_object_mut().unwrap().remove("storage.nfs.mount.oldest_request_age_seconds");
+        assert_eq!(filesystem(&node(),&object,3000)["accessibility"]["state"],"unknown");
+        object["latest_metrics"]["storage.nfs.mount.oldest_request_age_seconds"]=json!({"state":"ok","value":"0","observed_at":"1970-01-01T00:00:03Z"});
+        assert_eq!(filesystem(&node(),&object,3000)["accessibility"]["state"],"no_current_warning");
     }
 }

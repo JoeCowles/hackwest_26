@@ -5,7 +5,7 @@ use axum::{
     http::Request,
 };
 use chrono::Utc;
-use orchard_server::{api, cider_api, cider_wire, notifications, read_api, store::AppState};
+use cider_server::{api, cider_api, cider_wire, notifications, read_api, store::AppState};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -67,7 +67,7 @@ fn routes(state: &AppState) -> Router {
 impl Harness {
     async fn watch_views(&self, now: i64) -> Vec<Value> {
         let mut tx = self.state.db.begin().await.unwrap();
-        orchard_server::device_watch::summaries(&mut tx, now)
+        cider_server::device_watch::summaries(&mut tx, now)
             .await
             .unwrap()
     }
@@ -190,6 +190,97 @@ fn device(driver: &str, bps: Option<&str>) -> Value {
 }
 
 #[tokio::test]
+async fn mapped_usb_and_physical_removal_share_one_notification_in_either_order() {
+    for (physical_first,stale_secondary) in [(true,false),(true,true),(false,false)] {
+        let mut h = Harness::new().await;
+        let mut first = h.heartbeat(1, vec![device("driver-1", None)], "ok", true);
+        let at = first["created_at"].clone();
+        first["resources"].as_array_mut().unwrap().push(json!({"resource_id":"physical-usb","resource_type":"physical_device","revision":"1","observed_at":at,"identity_confidence":"host_local","attributes":{"source":"diskutil.list.physical","bsd_name":"disk4"}}));
+        first["relationships"] = json!([{"relationship_id":"usb-backing","revision":"1","observed_at":at,"from_resource_id":"driver-1","to_resource_id":"physical-usb","relation":"attached_to","attributes":{"source":"derived.storage","state":"resolved","mapping_method":"iokit.direct_whole_media"}}]);
+        let retained:Vec<_>=first["resources"].as_array().unwrap().iter().filter(|r|r["resource_id"]!="physical-usb").cloned().collect();
+        let mut physical=first["resources"].as_array().unwrap().iter().find(|r|r["resource_id"]=="physical-usb").unwrap().clone();
+        h.send(&first).await;
+        h.observe(6, vec![device("driver-1", None)], "ok", true).await;
+        for second in [11,16,21] {
+            let mut absent = h.heartbeat(second, vec![], "ok", true);
+            if second == if physical_first {11} else {21} {
+                absent["inventory"] = json!({"revision":"2","included":true});
+                absent["resources"] = json!(retained);
+                absent["tombstones"] = json!([{"entity_type":"resource","entity_id":"physical-usb","revision":"2","observed_at":Utc::now().to_rfc3339(),"reason":"removed"}]);
+            } else if physical_first { absent["inventory"]["revision"] = json!("2"); }
+            h.send(&absent).await;
+        }
+        cider_server::attention::reconcile(&h.state,Utc::now().timestamp_millis()).await.unwrap();
+        assert_eq!(h.queued().await,1,"one mapped disconnect must not notify twice; physical_first={physical_first}");
+        let (_,body)=request(&h.app,"GET","/api/v1/attention",ADMIN,Value::Null).await;
+        let concerns:Vec<_>=body["data"].as_array().unwrap().iter().filter(|e|
+            e["kind"]=="drive_removal" || e["source_key"].as_str().is_some_and(|k|k.starts_with("device_presence:"))).collect();
+        assert_eq!(concerns.len(),2,"both distinct supporting observations remain visible");
+        assert_eq!(concerns.iter().filter(|e|e["evidence"]["notification_correlation"].is_object()).count(),1);
+        if physical_first {
+            // Physical inventory can return before the USB watch has recovered.
+            if stale_secondary {
+                let mut failed=h.heartbeat(24,vec![],"failed",false);failed["inventory"]["revision"]=json!("2");h.send(&failed).await;
+                cider_server::attention::reconcile(&h.state,Utc::now().timestamp_millis()).await.unwrap();
+            }
+            let mut present=h.heartbeat(26,vec![],"ok",true);
+            physical["revision"]=json!("3");physical["observed_at"]=json!(Utc::now().to_rfc3339());
+            present["inventory"]=json!({"revision":"3","included":true});
+            present["resources"]=json!(retained);present["resources"].as_array_mut().unwrap().push(physical);
+            if stale_secondary {present["collections"]=json!([]);present["collector_states"]=json!([]);}
+            h.send(&present).await;
+            if stale_secondary {
+                assert_eq!(h.queued().await,0,"unknown USB state defers transfer");
+                h.restart().await;
+                let mut absent=h.heartbeat(31,vec![],"ok",true);absent["inventory"]["revision"]=json!("3");h.send(&absent).await;
+            }
+            assert_eq!(h.queued().await,1,"resolving the primary must preserve delivery for the still-absent USB connection");
+        } else {
+            // A new USB occurrence must not be deduplicated against an old
+            // physical event whose BSD identity has not been observed again.
+            for second in [26,31] {
+                let mut present=h.heartbeat(second,vec![device("driver-2",None)],"ok",true);
+                present["inventory"]["revision"]=json!("2");h.send(&present).await;
+            }
+            for second in [36,41] {
+                let mut absent=h.heartbeat(second,vec![],"ok",true);
+                absent["inventory"]["revision"]=json!("2");h.send(&absent).await;
+            }
+            let episodes=h.episodes().await;
+            let latest=episodes.iter().find(|e|e["status"]=="open").unwrap();
+            assert_eq!(latest["notification"]["state"],"queued","confirmed recovery starts a new disappearance occurrence");
+            assert!(latest["evidence"]["notification_correlation"].is_null());
+        }
+    }
+}
+
+#[tokio::test]
+async fn missing_ambiguous_and_old_context_usb_backing_cannot_suppress_physical_alerts() {
+    for mapping in ["missing","ambiguous","old_context"] {
+        let mut h=Harness::new().await;
+        let mut first=h.heartbeat(1,vec![device("driver-1",None)],"ok",true);
+        let at=first["created_at"].clone();
+        first["resources"].as_array_mut().unwrap().push(json!({"resource_id":"physical-usb","resource_type":"physical_device","revision":"1","observed_at":at,"identity_confidence":"host_local","attributes":{"source":"diskutil.list.physical"}}));
+        if mapping!="missing" {
+            first["relationships"]=json!([{"relationship_id":"edge","revision":"1","observed_at":at,"from_resource_id":"driver-1","to_resource_id":"physical-usb","relation":"attached_to","attributes":{"source":"derived.storage","state":"resolved"}}]);
+            if mapping=="old_context" {first["relationships"][0]["attributes"]["agent_session_id"]=json!("old-session");}
+            else {
+                let mut edge=first["relationships"][0].clone();edge["relationship_id"]=json!("ambiguous-edge");
+                first["relationships"].as_array_mut().unwrap().push(edge);
+            }
+        }
+        let retained:Vec<_>=first["resources"].as_array().unwrap().iter().filter(|r|r["resource_id"]!="physical-usb").cloned().collect();
+        h.send(&first).await;h.observe(6,vec![device("driver-1",None)],"ok",true).await;
+        let mut removed=h.heartbeat(11,vec![],"ok",true);removed["inventory"]=json!({"revision":"2","included":true});
+        removed["resources"]=json!(retained);
+        removed["tombstones"]=json!([{"entity_type":"resource","entity_id":"physical-usb","revision":"2","observed_at":Utc::now().to_rfc3339(),"reason":"removed"}]);
+        h.send(&removed).await;
+        let mut absent=h.heartbeat(16,vec![],"ok",true);absent["inventory"]["revision"]=json!("2");h.send(&absent).await;
+        assert_eq!(h.queued().await,2,"{mapping} backing cannot establish duplicate observations");
+    }
+}
+
+#[tokio::test]
 async fn complete_absence_queues_once_and_positive_reappearance_resolves() {
     let mut h = Harness::new().await;
     h.observe(1, vec![device("driver-1", Some("5000000000"))], "ok", true)
@@ -305,7 +396,7 @@ async fn weak_identity_exposes_reported_speed_without_historical_comparison() {
     let mut h = Harness::new().await;
     h.observe(1, vec![weak_device()], "ok", true).await;
     let mut tx = h.state.db.begin().await.unwrap();
-    let rows = orchard_server::device_watch::summaries(&mut tx, Utc::now().timestamp_millis())
+    let rows = cider_server::device_watch::summaries(&mut tx, Utc::now().timestamp_millis())
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -426,7 +517,7 @@ async fn stale_failed_missing_speed_and_owner_loss_preserve_open_history_as_unkn
         .execute(&h.state.db)
         .await
         .unwrap();
-    orchard_server::attention::reconcile(&h.state, Utc::now().timestamp_millis())
+    cider_server::attention::reconcile(&h.state, Utc::now().timestamp_millis())
         .await
         .unwrap();
     assert_eq!(h.episodes().await[0]["observation_state"], "stale");
@@ -566,14 +657,14 @@ fn disk_projection_rejects_two_current_drivers_even_when_only_one_is_watched() {
     let disk = json!({"object_id":"disk","io":{"linkage_state":"unknown"}});
     let object = |id| json!({"object_id":id,"node_id":"node","active":true,"topology_state":"resolved","physical_disk_ids":["disk"],"properties":{"ciderd_resource_type":"controller","scope":"driver","source":"IOBlockStorageDriver","ciderd_acquisition":context}});
     let rows = vec![
-        json!({"node_id":"node","driver_object_id":"driver-1","attributed":true,"context":{"boot":orchard_server::store::fingerprint(b"boot"),"generation":"1","session":orchard_server::store::fingerprint(b"session"),"clock":"clock"},"projection":{"watch_id":"watch"}}),
+        json!({"node_id":"node","driver_object_id":"driver-1","attributed":true,"context":{"boot":cider_server::store::fingerprint(b"boot"),"generation":"1","session":cider_server::store::fingerprint(b"session"),"clock":"clock"},"projection":{"watch_id":"watch"}}),
     ];
     assert_eq!(
-        orchard_server::device_watch::disk_projection(&node, &disk, &[object("driver-1")], &rows)["watch_id"],
+        cider_server::device_watch::disk_projection(&node, &disk, &[object("driver-1")], &rows)["watch_id"],
         "watch"
     );
     assert!(
-        orchard_server::device_watch::disk_projection(
+        cider_server::device_watch::disk_projection(
             &node,
             &disk,
             &[object("driver-1"), object("driver-2")],
@@ -625,7 +716,7 @@ async fn strong_weak_strong_identity_change_preserves_unique_current_projection(
         json!({"object_id":driver,"node_id":h.node,"active":true,"topology_state":"resolved","physical_disk_ids":["disk"],"properties":{"source":"IOBlockStorageDriver","scope":"driver","ciderd_resource_type":"controller","ciderd_acquisition":context}}),
     ];
     let disk = json!({"object_id":"disk"});
-    let view = orchard_server::device_watch::disk_projection(&node, &disk, &objects, &rows);
+    let view = cider_server::device_watch::disk_projection(&node, &disk, &objects, &rows);
     assert_eq!(view["identity_basis"], "reported_usb_serial");
     assert_eq!(view["negotiated_bps"], "5000000000");
     h.observe(31, vec![], "ok", true).await;

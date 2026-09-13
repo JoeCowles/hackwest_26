@@ -3,7 +3,7 @@
 Implemented on 2026-09-13. This section supplements the surrounding collector and
 operator contracts; implementation verification is recorded below.
 
-Orchard observes an identified USB storage connection disappearing or negotiating
+Cider observes an identified USB storage connection disappearing or negotiating
 below its previously confirmed speed. The collector supplies connection evidence;
 the server maintains durable watches and uses the existing Attention/SMS pipeline.
 These observations do not establish damaged media, predict failure, distinguish
@@ -48,7 +48,7 @@ Read responses retain `{data,meta}` with api_version, server_time, request_id,
 snapshot_cursor and next_cursor. Exact bitrates are decimal strings, dates are
 RFC3339, nullable evidence remains unknown, and responses use no-store. Lists use
 the existing limit=1..500 (default 100), opaque cursor, 300-second frozen traversal,
-120 reads/minute and burst 20. Refresh the initial route for new observations.
+240 reads/minute and burst 40. Refresh the initial route for new observations.
 Existing read statuses apply: 200 even when evidence is unavailable; 400 invalid
 or repeated query fields; 401 credential failure; 403 scope failure; 404 unknown
 resource; 410 expired cursor; 429 rate limiting; 503 bounded-selection unavailable;

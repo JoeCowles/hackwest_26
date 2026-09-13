@@ -1,6 +1,43 @@
 // Independent live summary, inventory, and frozen table snapshots.
 import { NAV } from './data.js';
 
+const VIEWER_TOKEN_KEY = 'cider.viewer-token';
+export const validViewerToken = token => typeof token === 'string' && /^viewer_[A-Za-z0-9_-]+$/.test(token);
+
+// localStorage is scoped by the browser to this console's origin. Store only
+// verified read-only credentials, never snapshots or administrator credentials.
+export class ViewerCredentialStore {
+  constructor(storage = () => globalThis.localStorage) { this.storage = storage; this.notice = ''; }
+  load() {
+    try {
+      const token = this.storage().getItem(VIEWER_TOKEN_KEY);
+      if (validViewerToken(token)) return token;
+      if (token) this.clear();
+    } catch { this.notice = 'This browser cannot remember the viewer credential. You can still connect for this page session.'; }
+    return '';
+  }
+  save(token) {
+    if (!validViewerToken(token)) return false;
+    try {
+      this.storage().setItem(VIEWER_TOKEN_KEY, token);
+      this.notice = ''; return true;
+    } catch {
+      this.notice = 'This browser could not save the viewer credential. Keep this page open, or reconnect after reloading.';
+      return false;
+    }
+  }
+  clear() {
+    try { this.storage().removeItem(VIEWER_TOKEN_KEY); this.notice = ''; return true; }
+    catch {
+      try { this.storage().setItem(VIEWER_TOKEN_KEY, ''); this.notice = ''; return true; }
+      catch {
+        this.notice = "Disconnected from this page. The browser could not remove its saved viewer credential; clear this site's browser data to remove it.";
+        return false;
+      }
+    }
+  }
+}
+
 export function parseRoute(hash) {
   const [candidate, encodedId, detailPart, encodedDetail] = hash.replace(/^#\/?/, '').split('/');
   const view = NAV.some(([, , id]) => id === candidate) ? candidate : 'overview';
@@ -35,7 +72,7 @@ export const minimumRefreshDelay = (hidden, retryAt = 0, now = performance.now()
 // have independent requests and cannot delay these values.
 export async function readSnapshot(client, now = () => performance.now(), wallNow = () => Date.now()) {
   const started = now(), wallStarted = wallNow();
-  const results = await Promise.allSettled([client.get('/api/v1/cluster'), client.all('/api/v1/nodes')]);
+  const results = await Promise.allSettled([client.get('/api/v1/cluster'), client.all('/api/v1/nodes', {}, { releasePrevious: true })]);
   const failures = results.filter(result => result.status === 'rejected');
   const failure = failures.find(result => [401, 403].includes(result.reason?.status)) || failures[0];
   if (failure) throw failure.reason;
@@ -73,10 +110,11 @@ export function collectionForView(collection, view, nodeId) {
 // Each table owns a frozen server cursor snapshot. Cached previous pages remain
 // reviewable after cursor expiry; Refresh explicitly starts a new traversal.
 export class CursorPages {
-  constructor(client, path, params = {}, onChange = () => {}, onAuth = () => {}) {
+  constructor(client, path, params = {}, onChange = () => {}, onAuth = () => {}, options = {}) {
     this.client = client; this.path = path; this.params = params;
     this.onChange = onChange; this.onAuth = onAuth;
     this.pages = []; this.index = 0; this.busy = false; this.error = ''; this.expired = false; this.closed = false;
+    this.followEnabled = options.follow === true; this.following = this.followEnabled; this.retryAt = 0;
   }
   snapshot() {
     const page = this.pages[this.index];
@@ -84,24 +122,32 @@ export class CursorPages {
     return { key: JSON.stringify({ path: this.path, params: this.params }), rows: page?.data || [], meta: page?.meta, pageNumber: this.index + 1,
       rangeStart: page?.data.length ? offset + 1 : 0, rangeEnd: offset + (page?.data.length || 0),
       moreAvailable: !!page?.meta.next_cursor, canPrevious: this.index > 0, canNext: !!this.pages[this.index + 1] || (!this.expired && !!page?.meta.next_cursor),
-      busy: this.busy, error: this.error, expired: this.expired };
+      busy: this.busy, error: this.error, expired: this.expired, following: this.followEnabled ? this.following : null };
   }
   notify() { if (!this.closed) this.onChange(this.snapshot()); }
   close() { this.closed = true; this.client.close?.(); }
   previous() { if (!this.busy && this.index > 0) { this.index--; this.notify(); } }
   async next() {
     if (this.busy || this.closed) return;
+    if (this.snapshot().canNext) this.following = false;
     if (this.pages[this.index + 1]) { this.index++; this.notify(); return; }
     const cursor = this.pages[this.index]?.meta.next_cursor;
     if (cursor && !this.expired) await this.load(cursor);
   }
-  async refresh() { if (!this.busy && !this.closed) await this.load(null); }
-  async load(cursor) {
+  async refresh() { if (!this.busy && !this.closed && performance.now() >= this.retryAt) { this.following = this.followEnabled; await this.load(null); } }
+  async follow() {
+    if (this.following && !this.busy && !this.closed && performance.now() >= this.retryAt) await this.load(null, this.pages[0]?.meta.next_cursor);
+  }
+  async load(cursor, releaseCursor = null) {
+    // The server may release this handle before a replacement fails. Keep the
+    // dated local rows, but prevent Next until a new first page is accepted.
+    if (releaseCursor) this.expired = true;
     this.busy = true; this.error = ''; this.notify();
     try {
-      const page = await this.client.get(this.path, { ...this.params, limit: 100, ...(cursor ? { cursor } : {}) });
+      const page = await this.client.get(this.path, { ...this.params, limit: 100, ...(cursor ? { cursor } : {}) }, { releaseCursor });
       if (this.closed) return;
       if (!Array.isArray(page.data)) throw new Error('Expected a paginated collection.');
+      this.retryAt = 0;
       if (cursor) {
         if (page.meta.next_cursor && this.pages.some(p => p.meta.next_cursor === page.meta.next_cursor)) throw new Error('The server repeated a pagination cursor. Refresh snapshot to retry.');
         this.pages.push(page); this.index++;
@@ -109,8 +155,10 @@ export class CursorPages {
     } catch (error) {
       if (this.closed || error.name === 'AbortError') return;
       if ([401, 403].includes(error.status)) this.onAuth(error);
+      if (error.status === 429) this.retryAt = performance.now() + Math.max(1000, (error.retryAfter || 0) * 1000);
       this.expired = this.expired || error.status === 410;
       this.error = error.status === 410 ? 'This cursor expired. Refresh snapshot to load current rows.' : error.message || 'Table data is unavailable. Refresh snapshot to retry.';
+      if (releaseCursor) this.error += ' The prior cursor may have been released. Refresh snapshot or wait for automatic refresh before paging.';
     } finally { this.busy = false; this.notify(); }
   }
 }
@@ -133,7 +181,7 @@ function validateStoragePage(page, nodeId, firstMeta) {
 export async function readDisks(client, node, now = () => performance.now(), wallNow = () => Date.now()) {
   const started=now(), wallStarted=wallNow(), data=[], seen=new Set(); let cursor=null, meta;
   do {
-    const page=await client.get(`/api/v1/nodes/${encodeURIComponent(node.node_id)}/disks`, {limit:500, ...(cursor ? {cursor} : {})});
+    const page=await client.get(`/api/v1/nodes/${encodeURIComponent(node.node_id)}/disks`, {limit:500, ...(cursor ? {cursor} : {})}, {releasePrevious:!cursor});
     validateStoragePage(page,node.node_id,meta); meta ||= page.meta; data.push(...page.data); cursor=page.meta.next_cursor;
     if (snapshotExpired(started,wallStarted,now(),wallNow())) throw new Error('Disk summary refresh exceeded 15 seconds. Waiting for a timely refresh.');
     if(cursor && seen.has(cursor)) throw new Error('The server repeated a storage pagination cursor.');

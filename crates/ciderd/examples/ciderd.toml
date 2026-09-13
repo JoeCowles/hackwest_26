@@ -19,13 +19,13 @@ delivery_mode = "latest"
 follow_redirects = false
 
 [collection]
-io_seconds = 5
-mount_inventory_seconds = 15
+io_seconds = 3
+mount_inventory_seconds = 3
 nfs_counters_seconds = 15
-nfs_status_seconds = 15
+nfs_status_seconds = 3
 capacity_seconds = 15
 smart_seconds = 15
-inventory_reconcile_seconds = 5
+inventory_reconcile_seconds = 3
 apfs_accounting_seconds = 15
 jitter_percent = 0
 nfs_path_refresh_enabled = false

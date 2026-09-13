@@ -4,7 +4,7 @@ use axum::{
     http::Request,
 };
 use chrono::{Duration, Utc};
-use orchard_server::{api, cider_api, cider_wire, read_api, store::AppState};
+use cider_server::{api, cider_api, cider_wire, read_api, store::AppState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -655,11 +655,11 @@ async fn new_agent_session_interrupts_old_evidence_and_restart_retains_open_find
             .fetch_one(&reopened.db)
             .await
             .unwrap();
-    let retention_ms = orchard_server::reliability::Policy::default()
+    let retention_ms = cider_server::reliability::Policy::default()
         .closed_finding_retention_seconds as i64
         * 1000;
     let mut tx = reopened.db.begin().await.unwrap();
-    orchard_server::reliability_store::retain(&mut tx, ended_at + retention_ms)
+    cider_server::reliability_store::retain(&mut tx, ended_at + retention_ms)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -671,7 +671,7 @@ async fn new_agent_session_interrupts_old_evidence_and_restart_retains_open_find
         2
     );
     let mut tx = reopened.db.begin().await.unwrap();
-    orchard_server::reliability_store::retain(&mut tx, ended_at + retention_ms + 1)
+    cider_server::reliability_store::retain(&mut tx, ended_at + retention_ms + 1)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -687,7 +687,7 @@ async fn new_agent_session_interrupts_old_evidence_and_restart_retains_open_find
 async fn sustained_service_time_degradation_queues_one_admin_notification() {
     let h = Harness::new().await;
     let mut tx = h.state.db.begin().await.unwrap();
-    orchard_server::notifications::configure(&mut tx, &json!({"expected_revision":"initial",
+    cider_server::notifications::configure(&mut tx, &json!({"expected_revision":"initial",
         "enabled":true,"sender":"+15555550124","recipient":"+15555550123"}), "test", Utc::now().timestamp_millis()).await.unwrap();
     tx.commit().await.unwrap();
     let mut hb = h.heartbeat();
@@ -704,7 +704,7 @@ async fn sustained_service_time_degradation_queues_one_admin_notification() {
         ]);
         let result = h.send(&hb).await;
         assert_eq!(result.0, 200, "{}", result.1);
-        orchard_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
+        cider_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notification_outbox")
             .fetch_one(&h.state.db).await.unwrap();
         assert_eq!(count, if n < 72 { 0 } else { 1 }, "sample {n}");
@@ -714,7 +714,7 @@ async fn sustained_service_time_degradation_queues_one_admin_notification() {
     assert_eq!(body["data"][0]["evidence"]["rule_id"], "iokit.read_service_time");
     assert_eq!(body["data"][0]["notification"]["state"], "queued");
     assert_eq!(h.send(&hb).await.0, 200);
-    orchard_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
+    cider_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notification_outbox")
         .fetch_one(&h.state.db).await.unwrap();
     assert_eq!(count, 1, "replays do not notify twice");

@@ -2568,7 +2568,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "orchard-server"
+name = "cider-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2580,6 +2580,7 @@ dependencies = [
  "dotenvy",
  "eframe",
  "fs2",
+ "libc",
  "reqwest",
  "rustls",
  "serde",

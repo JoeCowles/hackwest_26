@@ -1,5 +1,5 @@
 //! Deterministic synthetic examples for contract/browser verification; no I/O workload.
-use orchard_server::{cider_wire::Decimal, detection::*, store};
+use cider_server::{cider_wire::Decimal, detection::*, store};
 use serde_json::{Value, json};
 
 const BASE: i64 = 1_789_300_800_000; // Synthetic UTC wall clock.

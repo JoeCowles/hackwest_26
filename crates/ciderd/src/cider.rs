@@ -1,4 +1,4 @@
-//! Explicit, one-time Orchard enrollment. Never invoked by the heartbeat loop.
+//! Explicit, one-time Cider enrollment. Never invoked by the heartbeat loop.
 use crate::{config::{self, Config}, heartbeat::bearer_header, identity, model::parse_json};
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
@@ -51,7 +51,7 @@ pub async fn enroll(config: &Config, name: &str, token_file: &Path) -> Result<St
     let token = std::str::from_utf8(&token_bytes).context("invalid enrollment token file")?.trim();
     let _ = bearer_header(token).context("invalid enrollment token")?;
     let mut url = reqwest::Url::parse(&config.heartbeat.endpoint)?;
-    ensure!(url.path() == "/api/v2/ciderd/heartbeat", "Orchard configuration must use /api/v2/ciderd/heartbeat");
+    ensure!(url.path() == "/api/v2/ciderd/heartbeat", "Cider configuration must use /api/v2/ciderd/heartbeat");
     url.set_path("/api/v1/nodes/enroll");
     let mut client = reqwest::Client::builder()
         .https_only(true).no_proxy().redirect(reqwest::redirect::Policy::none())

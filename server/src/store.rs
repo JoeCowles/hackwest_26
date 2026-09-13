@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{Mutex, Semaphore};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 #[derive(Clone, Default)]
@@ -28,7 +29,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub admin_hash: String,
     pub viewer_token: String,
-    pub viewer_expires_at: i64,
+    pub viewer_expires_at: Option<i64>,
     pub writer: Arc<Mutex<()>>,
     pub permits: Arc<Semaphore>,
     pub statistics: Arc<RwLock<Statistics>>,
@@ -52,6 +53,9 @@ pub fn timestamp(millis: i64) -> String {
 
 impl AppState {
     pub async fn open(path: &Path, admin_token: &str) -> anyhow::Result<Self> {
+        let directory = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+        let viewer_token = crate::config::load_or_create_viewer_token(directory)?;
+        anyhow::ensure!(viewer_token != admin_token, "Viewer and administrator credentials must differ");
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -103,12 +107,18 @@ impl AppState {
         Ok(Self {
             db,
             admin_hash: fingerprint(admin_token.as_bytes()),
-            viewer_token: secret("viewer"),
-            viewer_expires_at: Utc::now().timestamp_millis() + 8 * 60 * 60 * 1000,
+            viewer_token,
+            viewer_expires_at: None,
             writer: Arc::new(Mutex::new(())),
             permits: Arc::new(Semaphore::new(64)),
             statistics: Arc::new(RwLock::new(Statistics::default())),
         })
+    }
+
+    pub(crate) fn is_viewer(&self, token_hash: &str) -> bool {
+        let expected = fingerprint(self.viewer_token.as_bytes());
+        bool::from(token_hash.as_bytes().ct_eq(expected.as_bytes()))
+            && self.viewer_expires_at.is_none_or(|expires| Utc::now().timestamp_millis() < expires)
     }
 
     /// The native application invokes the same token transaction as the HTTP API.

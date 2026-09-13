@@ -10,7 +10,7 @@ const Kpi = ({ label, value, note }) => html`<div class="panel panel-pad"><div c
 export const PageControls = ({ paging }) => !paging ? null : html`<div class="page-controls">
   <div class="page-buttons"><button class="btn" disabled=${!!paging.busy || !paging.canPrevious} onClick=${paging.previous}>Previous</button><button class="btn" disabled=${!!paging.busy || !paging.canNext} onClick=${paging.next}>Next</button><button class="btn" disabled=${!!paging.busy} onClick=${paging.refresh}>Refresh snapshot</button></div>
   <div class="note" role="status">${paging.meta ? `Page ${paging.pageNumber}; rows ${paging.rangeStart}–${paging.rangeEnd}${paging.moreAvailable ? '; more rows available' : '; end of snapshot'}. Snapshot: ${timeLabel(paging.meta.server_time)}.` : paging.busy ? 'Loading the first page…' : 'No table snapshot loaded.'} ${paging.busy && paging.meta ? 'Loading…' : ''}</div>
-  <p class="note">Table observations are frozen while paging, up to 100 rows per page. Live summaries refresh independently. Refresh snapshot to see changes; server cursors expire five minutes after the snapshot is created.</p>
+  <p class="note">${paging.following === true ? 'This first filesystem page refreshes every 3 seconds while visible. Next pauses updates to keep all pages in the same snapshot.' : paging.following === false ? 'Filesystem updates are paused while reviewing a frozen snapshot. Refresh snapshot returns to the live first page.' : 'Table observations are frozen while paging. Refresh snapshot to see changes.'} Up to 100 rows per page. Live summaries refresh independently; server cursors expire five minutes after the snapshot is created.</p>
   ${paging.error ? html`<p class="connection-error" role="status">${paging.error} ${paging.rows?.length ? 'Previously loaded rows remain visible for reference.' : ''}</p>` : null}
 </div>`;
 const FilesystemValue = ({ measurement }) => {
@@ -27,7 +27,7 @@ const Chart = ({ history = [] }) => {
   </div>`;
 };
 export const Sidebar = ({ view, nodeCount, go }) => html`<aside class="sidebar">
-  <div style=${{padding:'0 18px'}}><div class="brand"><img src="/cidar-logo.png" alt="Cidar" style=${{display:'block',width:'100%',maxWidth:'220px',height:'auto',background:'#fff',borderRadius:'6px'}}/></div><div class="kicker">Live storage console</div></div>
+  <div style=${{padding:'0 18px'}}><div class="brand"><span class="mark"/><span class="word">CIDER</span></div><div class="kicker">Live storage console</div></div>
   <nav aria-label="Console views">${NAV.map(([number,label,id]) => html`<button key=${id} class=${'nav-btn'+(view===id?' active':'')} aria-current=${view===id?'page':undefined} onClick=${()=>go(id)}><span class="n">${number}</span><span class="label">${label}</span></button>`)}</nav>
   <div class="foot note" style=${{marginTop:'auto',padding:'0 18px'}}>Heartbeat 5s<br/>${nodeCount} hosts in the latest snapshot<br/>Viewer session</div>
 </aside>`;
@@ -38,10 +38,10 @@ export const Topbar = ({ title, vm, clock, connected, disconnect }) => html`<hea
 </header>`;
 export const Connection = ({ token, onInput, onSubmit, error }) => html`<section class="panel panel-pad connect-panel">
   <div class="eyebrow-accent">Connect to your cluster</div><h2>Real observations. No fixtures.</h2>
-  <p>Open the console from your running Orchard Server. In the Mac app, select <strong>Copy viewer credential</strong>, then connect below. For headless operation, the owner-only credential is in the server data directory as <code>viewer-token</code>.</p>
+  <p>Open the console from your running Cider Server. In the Mac app, select <strong>Copy viewer credential</strong>, then connect below. For headless operation, the owner-only credential is in the server data directory as <code>viewer-token</code>.</p>
   <form onSubmit=${onSubmit}><label for="viewer-token">Read-only viewer credential</label><div class="connect-fields"><input id="viewer-token" type="password" autocomplete="off" spellcheck="false" value=${token} onInput=${e=>onInput(e.target.value)} required placeholder="viewer_..."/><button class="btn btn-primary" type="submit">Connect</button></div></form>
   ${error ? html`<p class="connection-error" role="alert">${error}</p>` : null}
-  <p class="note">Credentials stay in memory, expire after eight hours, and are cleared on disconnect or reload. Restarting the server rotates the viewer credential. No administrator credential is needed here.</p>
+  <p class="note">After connecting, this browser remembers the read-only viewer credential for this server and reconnects after reloads or temporary server outages. Disconnect removes the saved credential and clears this page's observations. Use Disconnect on a shared browser. Expired or rejected credentials are removed automatically.</p>
 </section>`;
 const Hosts = ({ nodes, open }) => html`<${Panel} title="Enrolled hosts" note="Select a host for its inventory">
   ${nodes.length ? html`<div class="table-scroll"><table class="live-table"><thead><tr><th>Host</th><th>Availability</th><th>Local used / total</th><th>Read</th><th>Write</th><th>Last heartbeat</th></tr></thead><tbody>

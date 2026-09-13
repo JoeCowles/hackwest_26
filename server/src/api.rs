@@ -237,8 +237,7 @@ async fn rebaseline_detection(
     let token = headers.get("authorization").and_then(|h| h.to_str().ok()).and_then(|h| h.strip_prefix("Bearer ")).unwrap_or("");
     let actor_hash = store::fingerprint(token.as_bytes());
     if !bool::from(actor_hash.as_bytes().ct_eq(state.admin_hash.as_bytes())) {
-        let viewer_hash = store::fingerprint(state.viewer_token.as_bytes());
-        let viewer = bool::from(actor_hash.as_bytes().ct_eq(viewer_hash.as_bytes())) && Utc::now().timestamp_millis() < state.viewer_expires_at;
+        let viewer = state.is_viewer(&actor_hash);
         let node: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE credential_hash=? AND revoked_at IS NULL").bind(&actor_hash).fetch_one(&mut *tx).await?;
         if viewer || node > 0 { return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "Relearning requires an administrator credential")); }
     }
@@ -254,8 +253,7 @@ async fn operator_admin(state: &AppState, tx: &mut Transaction<'_, Sqlite>, head
     let token=headers.get("authorization").and_then(|h|h.to_str().ok()).and_then(|h|h.strip_prefix("Bearer ")).unwrap_or("");
     let actor=store::fingerprint(token.as_bytes());
     if !bool::from(actor.as_bytes().ct_eq(state.admin_hash.as_bytes())) {
-        let viewer_hash=store::fingerprint(state.viewer_token.as_bytes());
-        let viewer=bool::from(actor.as_bytes().ct_eq(viewer_hash.as_bytes())) && Utc::now().timestamp_millis()<state.viewer_expires_at;
+        let viewer=state.is_viewer(&actor);
         let node:i64=sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE credential_hash=? AND revoked_at IS NULL").bind(&actor).fetch_one(&mut **tx).await?;
         if viewer || node>0 {return Err(ApiError::new(StatusCode::FORBIDDEN,"forbidden","This change requires an administrator credential"));}
     }

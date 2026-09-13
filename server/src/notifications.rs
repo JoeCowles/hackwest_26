@@ -488,7 +488,7 @@ async fn step(state: &AppState, client: Option<&Twilio>, now: i64) -> ApiResult<
     // No SQLite transaction or writer guard survives into the HTTP operation.
     let message: Option<String> = job.get("message_sid");
     let body = format!(
-        "Orchard: a storage concern requires review. Attention {}. Open the dashboard for evidence and uncertainty.",
+        "Cider: a storage concern requires review. Attention {}. Open the dashboard for evidence and uncertainty.",
         job.get::<String, _>("episode_id")
     );
     let mut outcome = client

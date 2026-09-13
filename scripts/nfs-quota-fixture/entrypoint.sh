@@ -40,5 +40,5 @@ exportfs -ra
 rpc.rquotad -F -p 875 &
 rquotad_pid=$!
 repquota -uv /exports/quota
-printf 'ORCHARD_NFS_QUOTA_READY\n'
+printf 'CIDER_NFS_QUOTA_READY\n'
 wait "$rquotad_pid"

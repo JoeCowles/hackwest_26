@@ -73,6 +73,98 @@ test('repeated pagination cursors are rejected instead of looping', async () => 
   });
 });
 
+test('automatic filesystem replacement releases only its prior snapshot while manual paging preserves it', async () => {
+  const seen = []; let snapshot = 0;
+  await withServer((request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    seen.push({ cursor: url.searchParams.get('cursor'), release: request.headers['x-cider-release-cursor'] });
+    json(response, { data: [url.searchParams.get('cursor') || 'first'], meta: { next_cursor: url.searchParams.has('cursor') ? null : `snapshot-${++snapshot}` } });
+  }, async () => {
+    const table = new session.CursorPages(new ApiClient('viewer_test'), '/api/v1/filesystems', {}, () => {}, () => {}, { follow: true });
+    try {
+      await table.refresh(); await table.follow(); await table.next(); table.previous(); await table.refresh(); await table.follow();
+      assert.deepEqual(seen, [
+        { cursor: null, release: undefined }, { cursor: null, release: 'snapshot-1' },
+        { cursor: 'snapshot-2', release: undefined }, { cursor: null, release: undefined },
+        { cursor: null, release: 'snapshot-3' }
+      ]);
+    } finally { table.close(); }
+  });
+});
+
+test('failed replacement keeps dated rows and cannot page using its released cursor', async () => {
+  const seen = []; let fail = false, snapshot = 0;
+  await withServer((request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    seen.push({ cursor: url.searchParams.get('cursor'), release: request.headers['x-cider-release-cursor'] });
+    if (fail) return json(response, { error: { message: 'Snapshot unavailable' } }, 503);
+    json(response, { data: ['filesystem'], meta: { next_cursor: url.searchParams.has('cursor') ? null : `snapshot-${++snapshot}` } });
+  }, async () => {
+    const table = new session.CursorPages(new ApiClient('viewer_test'), '/api/v1/filesystems', {}, () => {}, () => {}, { follow: true });
+    try {
+      await table.refresh(); fail = true; await table.follow();
+      assert.deepEqual(table.snapshot().rows, ['filesystem']);
+      assert.equal(table.snapshot().canNext, false);
+      assert.equal(table.snapshot().following, true);
+      assert.match(table.snapshot().error, /refresh snapshot/i);
+      await table.next(); assert.equal(seen.length, 2);
+      fail = false; await table.follow();
+      assert.equal(seen[2].release, 'snapshot-1', 'retry can safely release the now-missing old handle again');
+      assert.equal(table.snapshot().canNext, true);
+      await table.next(); assert.equal(seen[3].cursor, 'snapshot-2');
+    } finally { table.close(); }
+  });
+});
+
+test('a release header cannot accompany a cursor-page request', async () => {
+  let requests = 0;
+  await withServer((_request, response) => { requests++; json(response, envelope([])); }, async () => {
+    const client = new ApiClient('viewer_test');
+    try {
+      await assert.rejects(client.get('/api/v1/filesystems', { cursor: 'next' }, { releaseCursor: 'prior' }), /first.page/i);
+      assert.equal(requests, 0);
+    } finally { client.close(); }
+  });
+});
+
+test('periodic complete traversals retain the first snapshot cursor after the terminal page', async () => {
+  const seen = []; let snapshot = 0;
+  await withServer((request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    seen.push({ cursor: url.searchParams.get('cursor'), release: request.headers['x-cider-release-cursor'] });
+    json(response, { data: ['node'], meta: { next_cursor: url.searchParams.has('cursor') ? null : `snapshot-${++snapshot}` } });
+  }, async () => {
+    const client = new ApiClient('viewer_test');
+    try {
+      await client.all('/api/v1/nodes', {}, { releasePrevious: true });
+      await client.all('/api/v1/nodes', {}, { releasePrevious: true });
+      assert.deepEqual(seen, [
+        { cursor: null, release: undefined }, { cursor: 'snapshot-1', release: undefined },
+        { cursor: null, release: 'snapshot-1' }, { cursor: 'snapshot-2', release: undefined }
+      ]);
+    } finally { client.close(); }
+  });
+});
+
+test('selected-host disk refresh releases its own preceding complete snapshot', async () => {
+  const seen = []; let snapshot = 0;
+  await withServer((request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    seen.push({ path: url.pathname, cursor: url.searchParams.get('cursor'), release: request.headers['x-cider-release-cursor'] });
+    json(response, { data: [], meta: { node_id: url.pathname.includes('/other/') ? 'other' : 'host', topology_revision: 'one', inventory_generation: '1', next_cursor: url.searchParams.has('cursor') ? null : `snapshot-${++snapshot}` } });
+  }, async () => {
+    const client = new ApiClient('viewer_test');
+    try {
+      await session.readDisks(client, { node_id: 'host' });
+      await session.readDisks(client, { node_id: 'other' });
+      await session.readDisks(client, { node_id: 'host' });
+      assert.equal(seen[2].release, undefined, 'another host cannot release this snapshot');
+      assert.equal(seen[4].release, 'snapshot-1');
+      assert.equal(seen[5].release, undefined);
+    } finally { client.close(); }
+  });
+});
+
 const clientFor = inventory => ({
   async get() { return envelope({ marker: 'current cluster' }); },
   async all(path, params) {

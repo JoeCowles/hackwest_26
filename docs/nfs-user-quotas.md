@@ -1,6 +1,6 @@
 # Configured NFS user quotas
 
-Orchard reads user quota observations from explicitly configured NFS servers with
+Cider reads user quota observations from explicitly configured NFS servers with
 classic ONC RPC rquota v1 GETQUOTA over UDP. Collection belongs to ciderd. The
 central server provides authenticated views of these observations and never
 queries remote filesystems. No export discovery, user enumeration or quota

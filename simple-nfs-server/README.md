@@ -4,7 +4,7 @@ Basic macOS NFS export and client mount management using the system `nfsd`.
 There is no telemetry collection, metrics upload, or monitoring daemon.
 
 This crate is a standalone workspace. It builds independently; the root workspace
-and existing Orchard server functionality are unchanged.
+and existing Cider server functionality are unchanged.
 
 ## Requirements
 
@@ -67,14 +67,14 @@ sudo target/release/simple-nfs-server mount
 `setup-server` only ever rewrites its own marked block:
 
 ```
-# >>> orchard-nfs managed block >>>
+# >>> cider-nfs managed block >>>
 ...
-# <<< orchard-nfs managed block <<<
+# <<< cider-nfs managed block <<<
 ```
 
 The block markers retain their original name so existing exports can still be
 updated or removed. Hand-written exports outside the block are preserved. The file is backed up to
-`/etc/exports.orchard-backup.<timestamp>` before every change, the result is
+`/etc/exports.cider-backup.<timestamp>` before every change, the result is
 validated with `nfsd checkexports`, and the original content (or original file
 absence) is restored if validation fails or the validator cannot run. Malformed,
 unclosed, or duplicate managed blocks stop the operation before rewriting the

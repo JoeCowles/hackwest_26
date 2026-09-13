@@ -1,15 +1,21 @@
 #!/usr/bin/env node
 // Synthetic API client only. This does not collect data from this computer.
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const base = process.env.ORCHARD_URL || 'http://127.0.0.1:8787';
-const credentialPath = process.env.ORCHARD_ADMIN_TOKEN_FILE || `${homedir()}/Library/Application Support/Orchard Server/admin-token`;
+// Compatibility only: follow the server's existing data location after upgrade.
+const currentDirectory = `${homedir()}/Library/Application Support/Cider Server`;
+const legacyDirectory = `${homedir()}/Library/Application Support/Orchard Server`;
+const configuredCredential = process.env.CIDER_ADMIN_TOKEN_FILE || process.env.ORCHARD_ADMIN_TOKEN_FILE;
+if (!configuredCredential && existsSync(currentDirectory) && existsSync(legacyDirectory)) throw new Error('Both server data directories exist; set CIDER_ADMIN_TOKEN_FILE explicitly.');
+const base = process.env.CIDER_URL || process.env.ORCHARD_URL || 'http://127.0.0.1:8787';
+const credentialPath = configuredCredential || `${existsSync(legacyDirectory) ? legacyDirectory : currentDirectory}/admin-token`;
 const admin = (await readFile(credentialPath, 'utf8')).trim();
-const count = Number(process.env.ORCHARD_DEMO_BATCHES || 12);
-if (!Number.isInteger(count) || count < 2 || count > 17280) throw new Error('ORCHARD_DEMO_BATCHES must be 2-17280');
+const count = Number(process.env.CIDER_DEMO_BATCHES || process.env.ORCHARD_DEMO_BATCHES || 12);
+if (!Number.isInteger(count) || count < 2 || count > 17280) throw new Error('CIDER_DEMO_BATCHES must be 2-17280');
 
 async function send(method, path, credential, body) {
   const headers = { 'Content-Type': 'application/json', 'X-Request-ID': randomUUID(), 'X-Request-Timestamp': new Date().toISOString() };
@@ -21,7 +27,7 @@ async function send(method, path, credential, body) {
 }
 const enrollment = await send('POST', '/api/v1/enrollment-tokens', admin, {});
 const agent = { version: '0.1.0-demo', os_build: 'synthetic' };
-const node = await send('POST', '/api/v1/nodes/enroll', null, { enrollment_token: enrollment.enrollment_token, name: 'Orchard demo node', agent });
+const node = await send('POST', '/api/v1/nodes/enroll', null, { enrollment_token: enrollment.enrollment_token, name: 'Cider demo node', agent });
 const root = `/api/v1/nodes/${node.node_id}`;
 const boot = randomUUID();
 const inventory = await send('PUT', `${root}/inventory`, node.credential, { generation: 1, objects: [

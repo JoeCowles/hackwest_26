@@ -114,7 +114,7 @@ schema migration or identity migration is needed for these additive maps.
   assert context and object identity are unchanged
   ```
 
-- [x] Run `cargo test --package orchard-server --locked --test cider_compat` and confirm the new provenance assertions expose the missing behavior.
+- [x] Run `cargo test --package cider-server --locked --test cider_compat` and confirm the new provenance assertions expose the missing behavior.
 - [x] Capture context only when `accept_version()` accepts an entity upsert. Remove it on confirmed tombstones; preserve original observation times on unchanged/replayed resources. Add `#[serde(default)]` fields and explicitly handle legacy missing context.
 
   ```text
@@ -126,7 +126,7 @@ schema migration or identity migration is needed for these additive maps.
       otherwise expose unknown provenance
   ```
 
-- [x] Verify that same-node boot/session checks, idempotence, exact counter derivation and existing capacity tests still pass with `cargo test --package orchard-server --locked`.
+- [x] Verify that same-node boot/session checks, idempotence, exact counter derivation and existing capacity tests still pass with `cargo test --package cider-server --locked`.
 - [x] Review the diff specifically for accidental current-heartbeat timestamp substitution. Deliver retained evidence that can safely feed Task 5.
 
 ## Task 2: Acquire optional hardware identity and classify it once
@@ -191,7 +191,7 @@ independent. Initial host attributes use `hardware_attributes`; no strict
   Apple Silicon entries in the four supported product lists available at execution.
 
 - [x] Project `node.hardware` on list/detail reads using Task 1's context. Retain `node.model`; do not interpret legacy arbitrary names as a verified family. Add source-state/boot-mismatch tests and old-collector round trips.
-- [x] Run `cargo test --package ciderd --locked` and `cargo test --package orchard-server --locked`. Confirm a failed model query still produces an otherwise valid initial heartbeat.
+- [x] Run `cargo test --package ciderd --locked` and `cargo test --package cider-server --locked`. Confirm a failed model query still produces an otherwise valid initial heartbeat.
 Shared-specification native writing/export verification for this contract completed under Task 8. No connector write or connector sign-off is claimed.
 
 ## Task 3: Acquire exact native driver and local-mount evidence
@@ -338,7 +338,7 @@ no I/O or native collection. Reuse the index across routes within that snapshot.
   assert unresolved driver linkage produces null rates, never node totals
   ```
 
-- [x] Establish failing tests with `cargo test --package orchard-server --locked --lib disk_view::`.
+- [x] Establish failing tests with `cargo test --package cider-server --locked --lib disk_view::`.
 - [x] Implement typed-edge normalization to node-namespaced object UUIDs, bounded traversal and canonical physical roots. Accept physical backing only from authoritative source evidence. Give empty-success, unsupported legacy, unavailable and stale physical inventory distinct `disk_inventory` metadata.
 - [x] Select exactly one confirmed driver source per disk; reuse stored Measurement/rate results and provenance. Preserve exact strings, tiny nonzero rates and failed/reset source states.
 
@@ -353,7 +353,7 @@ no I/O or native collection. Reuse the index across routes within that snapshot.
 
 - [x] Add `/api/v1/nodes/{node_id}/disks`, inventory `disk_id` filtering and metadata from the design. Route dispatch must distinguish the full subresource path; `/disks` must not fall through to the node-detail case. Preserve generic inventory access and object IDs.
 - [x] Extend frozen page storage with the new metadata; test that every page has identical structural stamps and that cursors remain bound to owner/path/query. Test correct disk-node ownership, malformed UUID, old generation, wrong role, expiry and bounded cache failures. Advertise the new route/feature in capabilities without claiming metric history or alerts.
-- [x] Run `cargo test --package orchard-server --locked` and `cargo check --workspace --locked`. Confirm existing local/shared-capacity and counter tests remain green.
+- [x] Run `cargo test --package cider-server --locked` and `cargo check --workspace --locked`. Confirm existing local/shared-capacity and counter tests remain green.
 Shared-specification native writing/export verification for this contract completed under Task 8. No connector write or connector sign-off is claimed.
 
 ## Task 6: Render grouped disks and per-disk metrics with independent loading
@@ -499,9 +499,9 @@ semantics; they must be labeled synthetic/same-host as applicable.
   ```sh
   cargo test --workspace --locked --no-fail-fast
   cargo check --workspace --locked
-  cargo check --package orchard-server --locked --no-default-features
+  cargo check --package cider-server --locked --no-default-features
   cargo build --workspace --locked
-  cargo build --package orchard-server --locked --no-default-features
+  cargo build --package cider-server --locked --no-default-features
   node --test web/tests/*.test.mjs
   node --check web/js/storage.js
   node --check web/js/storage-views.js

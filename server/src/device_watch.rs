@@ -98,6 +98,8 @@ struct Watch {
     present_count: u8,
     absent_count: u8,
     presence_open: bool,
+    #[serde(default)]
+    connection_epoch: String,
     link_open: bool,
     link_state: String,
     reason: Option<String>,
@@ -153,6 +155,7 @@ impl Watch {
             present_count: 0,
             absent_count: 0,
             presence_open: false,
+            connection_epoch: String::new(),
             link_open: false,
             link_state: "unknown".into(),
             reason: None,
@@ -226,8 +229,12 @@ impl Watch {
         self.reported_bps = d.negotiated_bps.clone();
         self.presence = "present".into();
         self.absent_count = 0;
+        let confirming_presence = self.present_count == 1;
         self.present_count = self.present_count.saturating_add(1).min(2);
         if self.present_count >= 2 {
+            if confirming_presence || self.connection_epoch.is_empty() {
+                self.connection_epoch = Uuid::new_v4().to_string();
+            }
             self.armed = true;
             self.presence_open = false;
         }
@@ -330,7 +337,7 @@ impl Watch {
         }
     }
     fn evidence(&self) -> Value {
-        json!({"policy_version":"1","identity":self.identity,"identity_basis":self.identity_basis,"identity_scope":self.identity_scope,"driver_resource_id":self.driver_resource_id,"object_id":self.object_id,"bsd_name":self.bsd_name,"presence":self.presence,"armed":self.armed,"present_observations":self.present_count,"absent_observations":self.absent_count,"collection_id":self.acquisition.collection_id,"observed_at":self.acquisition.observed_at,"baseline":self.baseline,"current":self.current_link,"required_observations":2,"minimum_observation_spacing_seconds":1,"reason":self.reason})
+        json!({"policy_version":"1","watch_id":self.watch_id,"connection_epoch":self.connection_epoch,"connection_context":self.context,"identity":self.identity,"identity_basis":self.identity_basis,"identity_scope":self.identity_scope,"driver_resource_id":self.driver_resource_id,"object_id":self.object_id,"bsd_name":self.bsd_name,"presence":self.presence,"armed":self.armed,"present_observations":self.present_count,"absent_observations":self.absent_count,"collection_id":self.acquisition.collection_id,"observed_at":self.acquisition.observed_at,"baseline":self.baseline,"current":self.current_link,"required_observations":2,"minimum_observation_spacing_seconds":1,"reason":self.reason})
     }
     fn projection(&self, now: i64, online: bool, limited: bool) -> Value {
         let observation = self.acquisition.observation(now, online);
@@ -683,6 +690,26 @@ fn online(node: &Value, now: i64) -> bool {
         && node["goodbye"] == false
         && node["revoked"] == false
 }
+
+/// Correlate a proven inventory edge with one armed watch in this source context.
+/// This is identity evidence only; absence still requires its normal observations.
+pub(crate) async fn watch_for_driver(
+    tx: &mut Transaction<'_, Sqlite>, hb: &Heartbeat, driver: &str,
+) -> ApiResult<Option<(String,String)>> {
+    let rows = sqlx::query("SELECT state_json FROM device_watch_devices WHERE node_id=? LIMIT 129")
+        .bind(&hb.node_id).fetch_all(&mut **tx).await?;
+    if rows.len() > MAX_NODE { return Err(ApiError::unavailable()); }
+    let context = Context::from(hb);
+    let mut matches = Vec::new();
+    for row in rows {
+        let w: Watch = decode(row.get("state_json"))?;
+        if w.driver_resource_id == driver && w.attributed && w.armed && w.context == context && !w.connection_epoch.is_empty() {
+            matches.push((w.watch_id,w.connection_epoch));
+        }
+    }
+    Ok(if matches.len() == 1 { matches.pop() } else { None })
+}
+
 pub async fn conditions(tx: &mut Transaction<'_, Sqlite>, now: i64) -> ApiResult<Vec<Condition>> {
     Ok(loaded(tx)
         .await?

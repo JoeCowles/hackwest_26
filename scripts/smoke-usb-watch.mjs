@@ -10,7 +10,7 @@ import {smokeCiderd} from './smoke-ciderd.mjs';
 for (const key of Object.keys(process.env)) if (key.startsWith('TWILIO_')) delete process.env[key];
 
 await smokeCiderd({cleanupOnFailure:true, verify:async ({temp,node,viewer,request,run})=>{
-  const database=path.join(temp,'server','orchard.sqlite3');
+  const database=path.join(temp,'server','cider.sqlite3');
   assert.match(node,/^[0-9a-f-]{36}$/);
   let native;
   for (let attempt=0;attempt<6;attempt++) {

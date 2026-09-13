@@ -1,22 +1,28 @@
-# Orchard storage monitoring
+# Cider storage monitoring
 
 Rust macOS collector, Rust native central server, and an authenticated live web
 console for storage telemetry.
 
-Orchard helps an administrator review storage concerns and their evidence. The
+Cider helps an administrator review storage concerns and their evidence. The
 console includes live throughput and capacity, drive reliability observations,
 activity deviations, an attention queue, configurable Twilio SMS, stored metric
 history, capacity exhaustion scenarios, NFS user quotas, and diagnostic readiness.
 USB connection watches cover confirmed disappearance and a negotiated link below
 the same enclosure's previously confirmed speed.
-Missing evidence stays unknown. Orchard observes and notifies; the administrator
+Missing evidence stays unknown. Cider observes and notifies; the administrator
 decides how to respond.
 
-- `server/`: `orchard-server`, a native macOS control application with SQLite,
+Enrolled collectors reuse their saved credentials after restarts. The console
+remembers its read-only viewer token, and server restarts retain that token.
+Discovery and visible refreshes use three seconds; heartbeats remain five.
+See [session and refresh details](docs/session-and-disconnection-refinements.md)
+and [disconnect evidence and notification behavior](docs/disconnection-alerts.md).
+
+- `server/`: `cider-server`, a native macOS control application with SQLite,
   TLS, enrollment, ingestion, and read APIs. It does not run node collectors.
 - `crates/ciderd/`: the macOS storage collector and its schema-2 wire contract,
   collectors, isolated workers, fixtures, daemon configuration, and launchd example.
-- `web/`: the Orchard Cluster Console, using live authenticated server reads.
+- `web/`: the Cider Cluster Console, using live authenticated server reads.
 - `scripts/`: project-local Cargo wrapper, TLS integration smoke test, macOS
   packaging, and synthetic demo client.
 - `simple-nfs-server/`: a separate administrative NFS helper, outside the monitoring
@@ -47,7 +53,7 @@ this implementation. Attention and optional Twilio delivery are described below.
 
 ```sh
 bash scripts/cargo-local.sh test --workspace --locked
-bash scripts/cargo-local.sh run -p orchard-server --example detection_example --locked
+bash scripts/cargo-local.sh run -p cider-server --example detection_example --locked
 bash scripts/cargo-local.sh build --workspace --locked
 node scripts/smoke-detection.mjs
 ```
@@ -72,7 +78,8 @@ unplug, 5 Gb/s-to-480 Mb/s downshift, and return-to-5 Gb/s rehearsal passed on o
 enclosure. Real handset delivery remains unverified.
 
 The collector publishes passive USB presence and negotiated-speed observations
-every five seconds. Two complete fresh absences of an armed connection open an
+every three seconds with the example configuration, delivered in five-second
+heartbeats. Two complete fresh absences of an armed connection open an
 Attention concern; two slower-link observations against a confirmed baseline
 open a separate connection-speed concern. Both use the existing optional SMS
 outbox. Unknown, partial and stale observations do not prove loss or recovery.
@@ -89,18 +96,18 @@ Install Rust and the Xcode command-line tools. The Cargo wrapper also supports
 this checkout's ignored project-local Rust installation.
 
 ```sh
-bash scripts/cargo-local.sh run --package orchard-server
+bash scripts/cargo-local.sh run --package cider-server
 ```
 
 The native window owns the server lifetime, creates one-use enrollment tokens,
 and opens the live web console. Default binding is `http://127.0.0.1:8787`.
-Default macOS state is `~/Library/Application Support/Orchard Server/`; do not
+Default macOS state is `~/Library/Application Support/Cider Server/`; do not
 commit its credentials or database. `--headless` runs without the native window.
 
 For real collectors, enable TLS even on loopback:
 
 ```sh
-bash scripts/cargo-local.sh run --package orchard-server -- \
+bash scripts/cargo-local.sh run --package cider-server -- \
   --bind 127.0.0.1:8787 \
   --tls-cert /absolute/path/server-cert.pem \
   --tls-key /absolute/path/server-key.pem
@@ -205,7 +212,7 @@ To repeat source validation on macOS:
 ```sh
 bash scripts/cargo-local.sh test --workspace --locked --no-fail-fast
 bash scripts/cargo-local.sh check --workspace --locked
-bash scripts/cargo-local.sh build --package orchard-server --no-default-features --locked
+bash scripts/cargo-local.sh build --package cider-server --no-default-features --locked
 bash scripts/cargo-local.sh build --workspace --locked
 node --test web/tests/*.test.mjs
 node --check web/js/api.js
@@ -234,11 +241,11 @@ Packaging and bundle verification are separate from the source checks above:
 
 ```sh
 bash scripts/package-macos.sh debug
-codesign --verify --deep --strict 'dist/Orchard Server.app'
+codesign --verify --deep --strict 'dist/Cider Server.app'
 node scripts/smoke-ciderd.mjs --packaged
 ```
 
-The packaging script produces `dist/Orchard Server.app` with an ad-hoc signature.
+The packaging script produces `dist/Cider Server.app` with an ad-hoc signature.
 The packaged smoke also requires the workspace ciderd binary. Developer ID
 signing and notarization remain separate release work. These commands are
 instructions for a new packaging run, not evidence that this review rebuilt or

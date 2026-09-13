@@ -3,24 +3,26 @@
 set -euo pipefail
 fixture_dir="$(cd "$(dirname "$0")" && pwd)"
 project_dir="$(cd "$fixture_dir/../.." && pwd)"
-fixture_name="${QUOTA_FIXTURE_NAME:-orchard-nfs-quota-test}"
-fixture_image="orchard-nfs-quota-fixture:local"
+fixture_name="${QUOTA_FIXTURE_NAME:-cider-nfs-quota-test}"
+fixture_image="cider-nfs-quota-fixture:local"
 fixture_port="${QUOTA_FIXTURE_PORT:-18751}"
 fixture_output="${QUOTA_FIXTURE_OUTPUT:-$project_dir/.codex-staging/operator-workflows/nfs-quota-verification}"
 fixture_engine=("${CONTAINER_ENGINE:-docker}")
 if [ -n "${PODMAN_CONNECTION:-}" ]; then fixture_engine+=(--connection "$PODMAN_CONNECTION"); fi
 own_container() {
-  [ "$("${fixture_engine[@]}" inspect -f '{{index .Config.Labels "orchard.fixture"}}' "$fixture_name")" = nfs-quota ] || { echo 'Refusing an unrelated container' >&2; exit 1; }
+  # Existing explicitly selected fixtures retain their original ownership label.
+  [ "$("${fixture_engine[@]}" inspect -f '{{index .Config.Labels "cider.fixture"}}' "$fixture_name")" = nfs-quota ] ||
+    [ "$("${fixture_engine[@]}" inspect -f '{{index .Config.Labels "orchard.fixture"}}' "$fixture_name")" = nfs-quota ] || { echo 'Refusing an unrelated container' >&2; exit 1; }
 }
 case "${1:-}" in
 up)
   if "${fixture_engine[@]}" inspect "$fixture_name" >/dev/null 2>&1; then echo 'Named container already exists; inspect it or run down first.' >&2; exit 1; fi
   "${fixture_engine[@]}" build -t "$fixture_image" "$fixture_dir"
-  "${fixture_engine[@]}" run -d --name "$fixture_name" --label orchard.fixture=nfs-quota \
+  "${fixture_engine[@]}" run -d --name "$fixture_name" --label cider.fixture=nfs-quota \
     --privileged --memory=256m --cpus=1 --pids-limit=128 \
     -p "127.0.0.1:$fixture_port:875/udp" "$fixture_image"
   for ((attempt=0;attempt<30;attempt++)); do
-    if "${fixture_engine[@]}" logs "$fixture_name" 2>&1 | grep -q '^ORCHARD_NFS_QUOTA_READY$'; then exit 0; fi
+    if "${fixture_engine[@]}" logs "$fixture_name" 2>&1 | grep -q '^CIDER_NFS_QUOTA_READY$'; then exit 0; fi
     if [ "$("${fixture_engine[@]}" inspect -f '{{.State.Running}}' "$fixture_name")" != true ]; then "${fixture_engine[@]}" logs "$fixture_name"; exit 1; fi
     sleep 1
   done

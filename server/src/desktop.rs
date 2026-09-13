@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, RichText};
-use orchard_server::store::AppState;
+use cider_server::store::AppState;
 use serde_json::Value;
 use std::{
     path::PathBuf,
@@ -17,13 +17,13 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Orchard Server")
+            .with_title("Cider Server")
             .with_inner_size([760.0, 570.0])
             .with_min_inner_size([620.0, 480.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "Orchard Server",
+        "Cider Server",
         options,
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::light());
@@ -78,7 +78,7 @@ impl eframe::App for Console {
         }
         egui::CentralPanel::default().show(ctx,|ui|{
             ui.add_space(14.0);
-            ui.label(RichText::new("ORCHARD / SERVER").size(28.0).strong());
+            ui.label(RichText::new("CIDER / SERVER").size(28.0).strong());
             ui.label("Storage telemetry control center");
             ui.separator();
             ui.label(RichText::new(self.status.read().map(|s|s.clone()).unwrap_or_else(|_|"Status unavailable".into())).color(Color32::from_rgb(60,104,143)));
@@ -117,7 +117,7 @@ impl eframe::App for Console {
                 ui.hyperlink_to("Open web console",format!("{}/",self.url));
                 if ui.button("Copy viewer credential").clicked(){ctx.copy_text(self.state.viewer_token.clone());}
             });
-            ui.small(format!("Read-only viewer expires {}. Restart the server to renew it.",orchard_server::store::timestamp(self.state.viewer_expires_at)));
+            ui.small("Read-only viewer credential is saved and remains valid across server restarts. It has no scheduled expiry.");
             ui.hyperlink_to("Open the shared Server Spec","https://docs.google.com/document/d/1JnsZHlYPXQ1IRsMSEHeboICzqqviKJylI7gRsuUK13E/edit?tab=t.bclfm0yxwd6r");
         });
     }

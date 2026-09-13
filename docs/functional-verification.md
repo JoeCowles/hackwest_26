@@ -147,7 +147,7 @@ See [system information](../crates/ciderd/src/platform/macos/mod.rs#L80),
 The focused capacity command was:
 
 ```sh
-cargo test --package orchard-server --locked --lib read_api::capacity_tests::
+cargo test --package cider-server --locked --lib read_api::capacity_tests::
 ```
 
 It passed five tests with no failures. The existing collector fixture test also

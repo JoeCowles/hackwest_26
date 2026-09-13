@@ -1,6 +1,6 @@
 # 22. Operator workflows HTTP contract
 
-Implemented scope: attention, administrator acknowledgement/SMS configuration, stored metric history, capacity-exhaustion scenarios, configured NFS user quotas, and passive diagnostics. Orchard observes and notifies; no repair, isolation, quota mutation, or hardware-failure prediction is introduced. Heartbeats remain five seconds. This section supplements the measurement/collector contracts in Server Spec sections 17 and 19.
+Implemented scope: attention, administrator acknowledgement/SMS configuration, stored metric history, capacity-exhaustion scenarios, configured NFS user quotas, and passive diagnostics. Cider observes and notifies; no repair, isolation, quota mutation, or hardware-failure prediction is introduced. Heartbeats remain five seconds. This section supplements the measurement/collector contracts in Server Spec sections 17 and 19.
 
 ## 22.1 Transport, authentication, envelopes, errors
 
@@ -14,7 +14,7 @@ Successful responses are 200:
 
 Dates are RFC3339; IDs/revisions are strings; exact measurement byte/count integers are decimal strings; coverage/count metadata are numbers. Nullable values remain unknown. Common measurements retain value, kind, unit, state, source, scope, observed_at, received_at, age_seconds, boot_id, inventory_generation, labels, ciderd acquisition metadata, derived_rate_per_second, and derivation_state (sections 17/19). Missing values are never zero. Examples below show data projections; field lists specify complete objects.
 
-Attention/quota/diagnostic lists accept `limit=1..500` (default 100) and opaque `cursor`. Keep filters and limit unchanged through a traversal. Pages freeze data and metadata for 300 seconds; refresh the initial route separately for new observations. Read budget: 120/minute, burst 20; page cache: 128 traversals/32 MiB. Responses use no-store.
+Attention/quota/diagnostic lists accept `limit=1..500` (default 100) and opaque `cursor`. Keep filters and limit unchanged through a traversal. Pages freeze data and metadata for 300 seconds; refresh the initial route separately for new observations. Read budget: 240/minute, burst 40; page cache: 128 traversals/32 MiB. Responses use no-store. Automatic filesystem following explicitly releases its previous cursor as documented in [session refinements](session-and-disconnection-refinements.md).
 
 Errors have `error:{code,message,fields:[{field,message}],request_id}`. Statuses: 400 invalid_query/invalid_payload/history_too_large; 401 missing/invalid/expired credential; 403 wrong credential scope; 404 not_found; 409 conflict or request_replayed; 410 cursor_expired; 413 payload_too_large; 429 rate_limited/backpressure (Retry-After: 1); 503 bounded-selection unavailable/attention_limit/source_limit; 500 internal_error. Unknown/repeated read parameters, malformed UUIDs and unsupported enums are rejected. Unavailable measurements normally remain 200 data with explicit states.
 

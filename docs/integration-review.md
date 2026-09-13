@@ -1,4 +1,4 @@
-# Orchard integration review — 2026-09-12
+# Cider integration review — 2026-09-12
 
 This review covers the collector, HTTP server, persistence, API projections,
 embedded console, desktop startup/lifetime, smoke tooling, and the separate
@@ -62,7 +62,7 @@ checks, and whitespace validation passed.
 ```sh
 cargo test --workspace --locked --no-fail-fast
 cargo check --workspace --locked
-cargo build --package orchard-server --no-default-features --locked
+cargo build --package cider-server --no-default-features --locked
 cargo build --workspace --locked
 node --test web/tests/*.test.mjs
 cargo test --manifest-path simple-nfs-server/Cargo.toml --locked

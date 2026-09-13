@@ -101,9 +101,9 @@ From the repository root:
 ```sh
 cargo test --workspace --locked --no-fail-fast
 cargo check --workspace --locked
-cargo check --package orchard-server --locked --no-default-features
+cargo check --package cider-server --locked --no-default-features
 cargo build --workspace --locked
-cargo build --package orchard-server --locked --no-default-features
+cargo build --package cider-server --locked --no-default-features
 node --test web/tests/*.test.mjs
 git diff --check
 node scripts/smoke-storage.mjs

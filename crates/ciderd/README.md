@@ -4,9 +4,9 @@ A reusable Rust crate and a single macOS executable implementing the supplied
 [storage telemetry guide](contract/guide.org). It sends schema 2.0 latest-state
 heartbeats to an authenticated HTTPS endpoint. It does not provide a server.
 
-## Orchard workspace integration
+## Cider workspace integration
 
-The workspace includes both `orchard-server` and `ciderd`. Orchard accepts this
+The workspace includes both `cider-server` and `ciderd`. Cider accepts this
 crate's schema-2 heartbeat at `POST /api/v2/ciderd/heartbeat` and projects accepted
 observations into its existing authenticated web-console read API. The server
 shares this crate's pure wire validator, not its collectors or worker runtime.
@@ -87,7 +87,7 @@ Both retain the supplied catalog's filesystem metric names and units.
 
 The host `iokit.block` collection also carries a version-1
 `extensions.usb_device_snapshot`, including complete empty enumerations. It uses
-the same five-second acquisition cadence and original collection timestamps as
+the same three-second acquisition cadence and original collection timestamps as
 the native worker. `src/device_snapshot.rs` defines its bounded pure types; the
 server shares those types without linking collection code. USB failures preserve
 usable I/O counters and cannot certify absence. Raw USB serial properties stay
@@ -102,8 +102,12 @@ selected Apple SDK rather than duplicating Apple struct layouts. Other hosts can
 build/test pure types and parsers; live acquisition requires macOS.
 
 Collection intervals are independent, with configurable jitter and skipped missed ticks.
-The example schedules inventory and I/O every five seconds and all other scans
-every 15 seconds, with jitter disabled. Optional NFS quotas also default to
+The example schedules physical inventory, mount inventory, I/O (including USB
+presence), and NFS status every three seconds. Heartbeat delivery remains every
+five seconds; all other scans run every 15 seconds, with jitter disabled. Existing
+installations should set `inventory_reconcile_seconds`, `mount_inventory_seconds`,
+`io_seconds`, and `nfs_status_seconds` to `3` in their saved configuration.
+Optional NFS quotas also default to
 15 seconds. These are scheduling intervals; slow jobs and worker contention can
 delay completed observations.
 Admission prioritizes scopes waiting longest. Command, native, and path/NFS

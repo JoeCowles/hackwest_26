@@ -1,6 +1,6 @@
 # Drive reliability — passive detection
 
-Implemented 2026-09-13. Orchard now persists source observations and findings for SMART/NVMe health, reported ATA sector defects, IOKit errors/retries, and workload-qualified read/write service-time degradation. Collection runs in ciderd; the central server only validates and evaluates accepted telemetry. Heartbeats and I/O sampling remain five seconds.
+Implemented 2026-09-13. Cider now persists source observations and findings for SMART/NVMe health, reported ATA sector defects, IOKit errors/retries, and workload-qualified read/write service-time degradation. Collection runs in ciderd; the central server only validates and evaluates accepted telemetry. Heartbeats and I/O sampling remain five seconds.
 
 ## Collection and meaning
 
@@ -28,7 +28,7 @@ GET `/api/v1/reliability/findings`: optional `node_id`, `object_id`, `status`, `
 
 GET `/api/v1/reliability/findings/{finding_id}`: one finding, including resolved/interrupted findings; no query parameters.
 
-All three are GET-only, have no request body, and require `Authorization: Bearer <viewer-or-administrator-credential>`. Node credentials receive 403; missing/invalid/expired credentials receive 401. The existing read budget is shared across routes: burst 20, refill 2 requests/second. `X-Request-ID` may supply a UUID; otherwise the server generates it. Responses include `Cache-Control: no-store` and `X-Request-ID`.
+All three are GET-only, have no request body, and require `Authorization: Bearer <viewer-or-administrator-credential>`. Node credentials receive 403; missing/invalid credentials receive 401. The read budget is shared across routes: burst 40, refill 4 requests/second. `X-Request-ID` may supply a UUID; otherwise the server generates it. Responses include `Cache-Control: no-store` and `X-Request-ID`.
 
 Success is HTTP 200 with `{data,meta}`. List data is an array; detail data is one object. Meta contains `api_version` ("1"), `server_time` (UTC RFC3339), `request_id` (UUID), `snapshot_cursor` (decimal change ID string), `next_cursor` (opaque string or null). List limit defaults to 100 and permits 1–500. Frozen pages expire after 300 seconds and bind the credential, route, filters and page size. Later ingestion cannot change an existing traversal.
 

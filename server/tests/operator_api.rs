@@ -1,5 +1,5 @@
 use axum::{Router, body::{Body, to_bytes}, http::Request};
-use orchard_server::{api, read_api, store::AppState};
+use cider_server::{api, read_api, store::AppState};
 use serde_json::{Value,json};
 use tower::ServiceExt;
 
@@ -81,8 +81,8 @@ async fn acknowledgement_needs_admin_and_matching_episode_revision() {
     let dir=tempfile::tempdir().unwrap();let state=AppState::open(&dir.path().join("db"),"admin").await.unwrap();
     let now=chrono::Utc::now().timestamp_millis();
     let mut tx=state.db.begin().await.unwrap();
-    let condition=orchard_server::attention::Condition{key:"test-source".into(),kind:"capacity".into(),node_id:uuid::Uuid::new_v4().to_string(),object_id:None,status:"open".into(),severity:"warning".into(),observation_state:"ok".into(),summary:"Observed usage above threshold".into(),evidence:json!({"used_ratio":0.95})};
-    let episode=orchard_server::attention::observe_condition(&mut tx,&condition,now).await.unwrap().unwrap();tx.commit().await.unwrap();
+    let condition=cider_server::attention::Condition{key:"test-source".into(),kind:"capacity".into(),node_id:uuid::Uuid::new_v4().to_string(),object_id:None,status:"open".into(),severity:"warning".into(),observation_state:"ok".into(),summary:"Observed usage above threshold".into(),evidence:json!({"used_ratio":0.95})};
+    let episode=cider_server::attention::observe_condition(&mut tx,&condition,now).await.unwrap().unwrap();tx.commit().await.unwrap();
     let app=api::router(state.clone()).merge(read_api::router(state.clone()));
     let path=format!("/api/v1/attention/{}/acknowledgement",episode["id"].as_str().unwrap());
     let body=json!({"expected_revision":episode["revision"],"note":"Replacement ordered"});

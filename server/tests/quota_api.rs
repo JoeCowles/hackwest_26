@@ -3,7 +3,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use orchard_server::{api, read_api, store::AppState};
+use cider_server::{api, read_api, store::AppState};
 use serde_json::Value;
 use tower::ServiceExt;
 async fn get(app: &Router, path: &str, token: &str) -> (u16, Value) {

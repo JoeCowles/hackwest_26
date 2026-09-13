@@ -1,4 +1,4 @@
-use orchard_server::{notifications, store::AppState};
+use cider_server::{notifications, store::AppState};
 use serde_json::json;
 #[tokio::test]
 async fn settings_default_disabled_masked_and_revision_guarded() {

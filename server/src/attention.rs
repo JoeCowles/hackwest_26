@@ -95,8 +95,46 @@ pub async fn observe_condition(
             .as_ref()
             .and_then(|r| r.get::<Option<String>, _>("ack_json"))
     };
+    let watch = if c.kind=="drive_removal" { c.evidence["usb_watch_id"].as_str() }
+        else if c.evidence["rule_id"]=="usb_connection_absent" { c.evidence["watch_id"].as_str() }
+        else { None };
+    let correlated:Option<String> = if transition && status=="open" {
+        if let (Some(watch),Some(epoch))=(watch,c.evidence["connection_epoch"].as_str().filter(|v|!v.is_empty())) {
+            sqlx::query_scalar("SELECT id FROM attention_episodes WHERE node_id=? AND id!=? AND status='open' AND json_extract(evidence_json,'$.connection_epoch')=? AND ((kind='drive_removal' AND json_extract(evidence_json,'$.usb_watch_id')=?) OR source_key=?) ORDER BY first_seen_at,id LIMIT 1")
+                .bind(&c.node_id).bind(&id).bind(epoch).bind(watch).bind(format!("device_presence:{watch}"))
+                .fetch_optional(&mut **tx).await?
+        } else { None }
+    } else { None };
+    let mut evidence=c.evidence.clone();
+    if let Some(other)=&correlated {
+        evidence["notification_correlation"]=json!({"episode_id":other,"reason":"same_observed_usb_disconnect"});
+    } else if !transition {
+        for key in ["notification_correlation","notification_transfer_pending","notification_transfer_from"] {
+            if let Some(value)=old.as_ref().and_then(|v|v["evidence"].get(key)) {
+                evidence[key]=value.clone();
+            }
+        }
+    }
+    let transferred=evidence["notification_transfer_pending"].clone();
+    let resume_transfer=if fresh && c.status=="open" && ack.is_none() && transferred.is_object()
+        && transferred["connection_epoch"]==c.evidence["connection_epoch"]
+        && transferred["created_at"].as_i64().is_some_and(|t|t<=now && now-t<=24*60*60*1000) {
+        sqlx::query_scalar::<_,bool>("SELECT enabled=1 AND revision=? FROM notification_settings WHERE id=1")
+            .bind(transferred["settings_revision"].as_str().unwrap_or("")).fetch_one(&mut **tx).await?
+    } else {false};
+    if resume_transfer {
+        evidence.as_object_mut().expect("transfer evidence object").remove("notification_transfer_pending");
+        evidence.as_object_mut().expect("transfer evidence object").remove("notification_correlation");
+        evidence["notification_transfer_from"]=transferred["episode_id"].clone();
+    }
+    // If the first of two correlated observations recovers before delivery,
+    // preserve its still-needed notification on the other current concern.
+    let transfer_pending:bool=if status=="resolved" {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attention_episodes e JOIN notification_settings s ON s.id=1 WHERE e.id=? AND s.enabled=1 AND (EXISTS(SELECT 1 FROM notification_outbox o WHERE o.episode_id=e.id AND o.state='queued' AND o.settings_revision=s.revision) OR (json_extract(e.notification_intent_json,'$.state')='pending_admission' AND json_extract(e.notification_intent_json,'$.settings_revision')=s.revision AND json_extract(e.notification_intent_json,'$.created_at')>=?)))")
+            .bind(&id).bind(now-24*60*60*1000).fetch_one(&mut **tx).await?
+    } else {false};
     sqlx::query("INSERT INTO attention_episodes(id,source_key,kind,node_id,object_id,status,severity,observation_state,summary,evidence_json,revision,first_seen_at,updated_at,resolved_at,ack_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET node_id=excluded.node_id,object_id=excluded.object_id,status=excluded.status,severity=excluded.severity,observation_state=excluded.observation_state,summary=excluded.summary,evidence_json=excluded.evidence_json,revision=excluded.revision,updated_at=excluded.updated_at,resolved_at=excluded.resolved_at,ack_json=excluded.ack_json")
- .bind(&id).bind(&c.key).bind(&c.kind).bind(&c.node_id).bind(&c.object_id).bind(status).bind(severity).bind(&c.observation_state).bind(&c.summary).bind(c.evidence.to_string()).bind(&revision).bind(now).bind(now).bind(if status=="resolved"{Some(now)}else{None}).bind(ack).execute(&mut **tx).await?;
+ .bind(&id).bind(&c.key).bind(&c.kind).bind(&c.node_id).bind(&c.object_id).bind(status).bind(severity).bind(&c.observation_state).bind(&c.summary).bind(evidence.to_string()).bind(&revision).bind(now).bind(now).bind(if status=="resolved"{Some(now)}else{None}).bind(ack).execute(&mut **tx).await?;
     if transition {
         crate::notifications::cancel_intent(
             tx,
@@ -110,12 +148,34 @@ pub async fn observe_condition(
         )
         .await?;
     }
-    if transition && status == "open" && matches!(severity, "warning" | "critical") {
+    if transition && status == "open" && correlated.is_none() && matches!(severity, "warning" | "critical") {
         crate::notifications::enqueue(tx, &id, &revision, now).await?;
     }
+    if resume_transfer {crate::notifications::enqueue(tx,&id,&revision,now).await?;}
     if status == "resolved" {
         crate::notifications::cancel_intent(tx, Some(&id), "condition_resolved", now).await?;
         sqlx::query("UPDATE notification_outbox SET state='suppressed',reason='condition_resolved',updated_at=? WHERE episode_id=? AND state='queued'").bind(now).bind(&id).execute(&mut **tx).await?;
+        if transfer_pending {
+            if let Some(other)=sqlx::query("SELECT id,revision,source_key,evidence_json FROM attention_episodes WHERE node_id=? AND status='open' AND ack_json IS NULL AND json_extract(evidence_json,'$.notification_correlation.episode_id')=? ORDER BY first_seen_at,id LIMIT 1")
+                .bind(&c.node_id).bind(&id).fetch_optional(&mut **tx).await? {
+                let other_id:String=other.get("id");
+                if other.get::<String,_>("source_key").starts_with("device_presence:") {
+                    // Reconciliation/ingestion must re-evaluate the USB source;
+                    // a stored current state can have become stale meanwhile.
+                    let settings_revision:String=sqlx::query_scalar("SELECT revision FROM notification_settings WHERE id=1").fetch_one(&mut **tx).await?;
+                    let other_evidence:Value=serde_json::from_str(other.get("evidence_json")).map_err(|_|ApiError::unavailable())?;
+                    let pending=json!({"episode_id":id,"settings_revision":settings_revision,"created_at":now,
+                        "connection_epoch":other_evidence["connection_epoch"]});
+                    sqlx::query("UPDATE attention_episodes SET evidence_json=json_set(evidence_json,'$.notification_transfer_pending',json(?)),updated_at=? WHERE id=?")
+                        .bind(pending.to_string()).bind(now).bind(&other_id).execute(&mut **tx).await?;
+                } else {
+                    // Physical removals are already committed event evidence.
+                    crate::notifications::enqueue(tx,&other_id,&other.get::<String,_>("revision"),now).await?;
+                    sqlx::query("UPDATE attention_episodes SET evidence_json=json_set(json_remove(evidence_json,'$.notification_correlation'),'$.notification_transfer_from',?),updated_at=? WHERE id=?")
+                        .bind(&id).bind(now).bind(&other_id).execute(&mut **tx).await?;
+                }
+            }
+        }
     }
     let row = sqlx::query("SELECT * FROM attention_episodes WHERE id=?")
         .bind(id)
@@ -525,8 +585,8 @@ pub async fn reconcile(state: &AppState, now: i64) -> ApiResult<()> {
         observed.insert(c.key.clone());
         observe_condition(&mut tx,&c,now).await?;
     }
-    // Drive removals are committed events, not gauges that become unknown when absent.
-    for row in sqlx::query("SELECT id,source_key FROM attention_episodes WHERE status='open' AND kind!='drive_removal' AND observation_state!='unknown'").fetch_all(&mut *tx).await? {
+    // Explicit drive and mount removals are events, not gauges that become unknown when absent.
+    for row in sqlx::query("SELECT id,source_key FROM attention_episodes WHERE status='open' AND kind!='drive_removal' AND source_key NOT LIKE 'mount_removal:%' AND observation_state!='unknown'").fetch_all(&mut *tx).await? {
         if !observed.contains(&row.get::<String,_>("source_key")) {
             sqlx::query("UPDATE attention_episodes SET observation_state='unknown',updated_at=? WHERE id=?").bind(now).bind(row.get::<String,_>("id")).execute(&mut *tx).await?;
         }

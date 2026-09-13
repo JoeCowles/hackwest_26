@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
-use orchard_server::{api, config::Config, read_api, store::AppState, workers};
+use cider_server::{api, config::Config, read_api, store::AppState, workers};
 use std::{
     net::TcpListener,
     sync::{Arc, RwLock},
@@ -15,16 +14,16 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "orchard_server=info".into()),
+                .unwrap_or_else(|_| "cider_server=info".into()),
         )
         .init();
-    let config = Config::parse();
+    let config = Config::parse_compatible();
     let files = config.prepare()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let state = runtime.block_on(AppState::open(
-        &files.directory.join("orchard.sqlite3"),
+        &cider_server::config::database_path(&files.directory)?,
         &files.admin_token,
     ))?;
     let listener = TcpListener::bind(config.bind).context("Unable to bind server address")?;
@@ -41,12 +40,11 @@ fn main() -> Result<()> {
     );
     let stop = CancellationToken::new();
     let server_status = Arc::new(RwLock::new(format!("Listening on {url}")));
-    read_api::write_viewer_file(&files.directory, &state.viewer_token)?;
     // The workspace includes both rustls providers; select the server provider explicitly.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let router = api::router(state.clone())
         .merge(read_api::router(state.clone()))
-        .merge(orchard_server::cider_api::router(state.clone()));
+        .merge(cider_server::cider_api::router(state.clone()));
     let status = server_status.clone();
     let shutdown = stop.clone();
     let tls_paths = config.tls_cert.clone().zip(config.tls_key.clone());
@@ -81,8 +79,8 @@ fn main() -> Result<()> {
         result
     });
     let worker = runtime.spawn(workers::run(state.clone(), stop.clone()));
-    let notifications = runtime.spawn(orchard_server::notifications::run(state.clone(), stop.clone()));
-    tracing::info!(address=%url,credentials=%files.credential_path.display(),"Orchard Server started; credentials are not logged");
+    let notifications = runtime.spawn(cider_server::notifications::run(state.clone(), stop.clone()));
+    tracing::info!(address=%url,credentials=%files.credential_path.display(),"Cider Server started; credentials are not logged");
     let desktop_result: Result<()>;
     #[cfg(feature = "desktop")]
     {

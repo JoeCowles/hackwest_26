@@ -141,7 +141,7 @@ export const SecurityView = ({ security = {}, nodes = [], now = performance.now(
   <${RuleFindings} paging=${security.ruleFindings || { rows: [], busy: true }} nodes=${nodes}/>
   <${RuleSources} paging=${security.ruleSources || { rows: [], busy: true }} nodes=${nodes}/>
   <${Panel} title="Storage activity detection" note="Read-only viewer">
-    <p>Orchard compares each admitted native driver's read and write rates with that same source's learned history. Findings preserve the threshold, counter intervals, dates, and coverage used at detection time.</p>
+    <p>Cider compares each admitted native driver's read and write rates with that same source's learned history. Findings preserve the threshold, counter intervals, dates, and coverage used at detection time.</p>
     <p class="note">This first rule observes sustained upper-rate deviations. It does not identify file access, application throughput, or a physical disk association, and it does not establish that quieter activity is safe. Administrator relearning is intentionally outside this viewer.</p>
   <//>
   <${Findings} paging=${security.findings || { rows: [], busy: true }} nodes=${nodes}/>

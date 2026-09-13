@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 process.umask(0o077);
 const root = fileURLToPath(new URL('../', import.meta.url));
 export async function smokeCiderd({ packaged = false, nativeWindow = false, beforeEnroll = async () => {}, verify = async () => {}, cleanupOnFailure = false } = {}) {
-const serverBinary = path.join(root, packaged ? 'dist/Orchard Server.app/Contents/MacOS/orchard-server' : 'target/debug/orchard-server');
+const serverBinary = path.join(root, packaged ? 'dist/Cider Server.app/Contents/MacOS/cider-server' : 'target/debug/cider-server');
 const staging = path.join(root, '.codex-staging');
 await fs.mkdir(staging, { recursive: true, mode: 0o700 });
 const temp = await fs.mkdtemp(path.join(staging, 'cider-smoke-'));
@@ -52,7 +52,7 @@ let succeeded = false;
 try {
   const caConfig = path.join(temp, 'ca.cnf');
   const leafConfig = path.join(temp, 'leaf.cnf');
-  await fs.writeFile(caConfig, '[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ca\n[dn]\nCN=Orchard integration test CA\n[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n');
+  await fs.writeFile(caConfig, '[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ca\n[dn]\nCN=Cider integration test CA\n[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n');
   await fs.writeFile(leafConfig, 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1,DNS:localhost\n');
   const ca = path.join(temp, 'ca.pem'), caKey = path.join(temp, 'ca-key.pem');
   const key = path.join(temp, 'server-key.pem'), cert = path.join(temp, 'server.pem'), csr = path.join(temp, 'server.csr');
@@ -154,9 +154,9 @@ try {
   }
   await verify({ root, temp, base, node, viewer, request, daemon, server, trust, start, run });
   const page = await request('GET', '/');
-  insist(page.status === 200 && /Orchard/.test(page.text), 'Embedded web console did not load');
+  insist(page.status === 200 && /Cider/.test(page.text), 'Embedded web console did not load');
   const help = await run(cider, ['enroll-server', '--help']);
-  insist(help.includes('Enroll with Orchard'), 'Enrollment help description is incorrect');
+  insist(help.includes('Enroll with Cider'), 'Enrollment help description is incorrect');
   console.log(JSON.stringify({ result: 'passed', server_binary: packaged ? 'packaged' : 'workspace', verified_tls: true, cli_enrollment: true, private_credentials: true, private_state_directory: true, distinct_heartbeats: seen.size, read_api_measurement_occurrences: metricCount, viewer_read_routes: 8, embedded_console: true, help_text: true }));
   succeeded = true;
 } catch (error) {

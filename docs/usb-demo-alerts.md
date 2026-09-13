@@ -1,6 +1,6 @@
 # USB disappearance and connection-speed demo
 
-This change adds a connection watch to Orchard's existing Attention and SMS
+This change adds a connection watch to Cider's existing Attention and SMS
 pipeline. It covers an observed USB storage connection disappearing and the same
 identified connection negotiating below a previously confirmed speed. These are
 connection observations; they do not establish damaged media or predict failure.

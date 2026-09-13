@@ -4,7 +4,7 @@ use axum::{
     http::Request,
 };
 use chrono::{Duration, Utc};
-use orchard_server::{api, cider_api, cider_wire, read_api, store::AppState};
+use cider_server::{api, cider_api, cider_wire, read_api, store::AppState};
 use serde_json::{Value, json};
 use sqlx::Row;
 use tempfile::TempDir;
@@ -190,7 +190,7 @@ async fn migration_and_native_ingestion_admit_both_directions() {
 
 async fn summaries(h: &Harness, now: i64) -> Vec<Value> {
     let mut tx = h.state.db.begin().await.unwrap();
-    orchard_server::detection_store::source_summaries(&mut tx, now)
+    cider_server::detection_store::source_summaries(&mut tx, now)
         .await
         .unwrap()
 }
@@ -313,7 +313,7 @@ async fn rebaseline_is_revision_guarded_audited_and_survives_restart() {
             .await
             .unwrap();
     let mut tx = h.state.db.begin().await.unwrap();
-    let err = orchard_server::detection_store::rebaseline(
+    let err = cider_server::detection_store::rebaseline(
         &mut tx,
         &source,
         2,
@@ -326,7 +326,7 @@ async fn rebaseline_is_revision_guarded_audited_and_survives_restart() {
     assert_eq!(err.status.as_u16(), 409);
     tx.rollback().await.unwrap();
     let mut tx = h.state.db.begin().await.unwrap();
-    let summary = orchard_server::detection_store::rebaseline(
+    let summary = cider_server::detection_store::rebaseline(
         &mut tx,
         &source,
         1,
@@ -345,7 +345,7 @@ async fn rebaseline_is_revision_guarded_audited_and_survives_restart() {
         .unwrap();
     let mut tx = reopened.db.begin().await.unwrap();
     let rows =
-        orchard_server::detection_store::source_summaries(&mut tx, Utc::now().timestamp_millis())
+        cider_server::detection_store::source_summaries(&mut tx, Utc::now().timestamp_millis())
             .await
             .unwrap();
     assert_eq!(
@@ -382,7 +382,7 @@ async fn timing_unknown_survives_persistence_and_read_freshness() {
     // Cross-clock collections are a legal transport record, but never a detector endpoint.
     let parsed: cider_wire::Heartbeat = serde_json::from_value(hb).unwrap();
     let mut tx = h.state.db.begin().await.unwrap();
-    orchard_server::detection_store::observe_collection(
+    cider_server::detection_store::observe_collection(
         &mut tx,
         &parsed,
         &parsed.resources[0],
@@ -397,7 +397,7 @@ async fn timing_unknown_survives_persistence_and_read_freshness() {
         .await
         .unwrap();
     for state in states {
-        serde_json::from_str::<orchard_server::detection::SourceState>(&state)
+        serde_json::from_str::<cider_server::detection::SourceState>(&state)
             .expect("All persisted numeric values must remain deserializable");
     }
 }
@@ -467,7 +467,7 @@ async fn observe_at(
     counter: u128,
     base: i64,
 ) {
-    let at = orchard_server::store::timestamp(base + t as i64 * 1000);
+    let at = cider_server::store::timestamp(base + t as i64 * 1000);
     hb.sequence = (t + 1).into();
     hb.created_at = at.clone();
     hb.resources[0].observed_at = at.clone();
@@ -482,7 +482,7 @@ async fn observe_at(
     hb.collector_states[0].last_attempt_id = Some(c.collection_id.clone());
     hb.validate().unwrap();
     let mut tx = state.db.begin().await.unwrap();
-    orchard_server::detection_store::observe_collection(
+    cider_server::detection_store::observe_collection(
         &mut tx,
         hb,
         &hb.resources[0],
@@ -549,7 +549,7 @@ async fn full_duration_finding_survives_restart_and_retention_preserves_unresolv
         .unwrap();
     assert_eq!(count, 1);
     let mut tx = reopened.db.begin().await.unwrap();
-    orchard_server::detection_store::retain(&mut tx, base + 40 * 86_400_000)
+    cider_server::detection_store::retain(&mut tx, base + 40 * 86_400_000)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -584,7 +584,7 @@ async fn full_duration_finding_survives_restart_and_retention_preserves_unresolv
     assert_eq!(resolved["evidence"]["recovery_seconds"], 60.);
     let ended = base + 780_000;
     let mut tx = reopened.db.begin().await.unwrap();
-    orchard_server::detection_store::retain(&mut tx, ended + 30 * 86_400_000)
+    cider_server::detection_store::retain(&mut tx, ended + 30 * 86_400_000)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -594,7 +594,7 @@ async fn full_duration_finding_survives_restart_and_retention_preserves_unresolv
         .unwrap();
     assert_eq!(count, 1);
     let mut tx = reopened.db.begin().await.unwrap();
-    orchard_server::detection_store::retain(&mut tx, ended + 30 * 86_400_000 + 1)
+    cider_server::detection_store::retain(&mut tx, ended + 30 * 86_400_000 + 1)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -674,7 +674,7 @@ async fn unrelated_collection_clock_cannot_interrupt_a_current_open_finding() {
     // The schema explicitly allows retained acquisitions from another clock.
     // Its newer wall time is not authority to change the heartbeat's clock.
     hb.sequence = 726u64.into();
-    hb.created_at = orchard_server::store::timestamp(base + 725_000);
+    hb.created_at = cider_server::store::timestamp(base + 725_000);
     hb.monotonic_ns = 725_200_000_000u64.into();
     hb.collections[0].clock_id = "unrelated-retained-clock".into();
     hb.collections[0].collection_id = "wrong-clock-attempt".into();
@@ -742,12 +742,12 @@ async fn oversized_source_selection_can_be_narrowed_without_breaking_core_warnin
         .execute(&h.state.db).await.unwrap();
     let now = Utc::now().timestamp_millis();
     let mut tx = h.state.db.begin().await.unwrap();
-    let error = orchard_server::detection_store::source_summaries(&mut tx, now)
+    let error = cider_server::detection_store::source_summaries(&mut tx, now)
         .await
         .unwrap_err();
     assert_eq!(error.status.as_u16(), 503);
     assert_eq!(error.code, "source_limit");
-    let narrowed = orchard_server::detection_store::source_summaries_filtered(
+    let narrowed = cider_server::detection_store::source_summaries_filtered(
         &mut tx,
         now,
         None,
@@ -756,7 +756,7 @@ async fn oversized_source_selection_can_be_narrowed_without_breaking_core_warnin
     .await
     .unwrap();
     assert_eq!(narrowed.len(), 2);
-    let warnings = orchard_server::detection_store::current_warning_summaries(&mut tx, now)
+    let warnings = cider_server::detection_store::current_warning_summaries(&mut tx, now)
         .await
         .unwrap();
     assert!(warnings.is_empty());

@@ -406,7 +406,7 @@ fn config_rejects_misspellings_and_unsafe_transport() {
         input.replace("follow_redirects = false", "follow_redirects = true"),
         input.replace("https://", "http://"),
         input.replace("request_timeout_seconds", "request_timout_seconds"),
-        input.replace("io_seconds = 5", "io_seconds = 0"),
+        input.replace("io_seconds = 3", "io_seconds = 0"),
         input.replace("recent_sample_history = 0", "recent_sample_history = 1"),
     ] {
         assert!(Config::parse(&invalid).is_err());

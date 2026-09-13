@@ -3,7 +3,7 @@
 > **For agentic workers:** Use superpowers:subagent-driven-development. Each task
 > below is independently owned; root performs integration and task/final review.
 
-**Goal:** Make Orchard's observations actionable with attention/SMS, history and
+**Goal:** Make Cider's observations actionable with attention/SMS, history and
 capacity runway, NFS user quotas, diagnostics readiness and MIT licensing.
 
 **Architecture:** Preserve the existing collector/receiver split. New pure or

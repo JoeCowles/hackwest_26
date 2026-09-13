@@ -8,7 +8,7 @@ pub mod heartbeat;
 pub mod hardware;
 pub mod identity;
 pub mod model;
-pub mod orchard;
+pub mod cider;
 pub mod platform;
 pub mod runtime;
 mod scheduler;

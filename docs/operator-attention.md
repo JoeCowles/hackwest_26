@@ -1,6 +1,6 @@
 # Operator attention and SMS delivery
 
-Orchard records concerns for an administrator to assess. Acknowledging a concern
+Cider records concerns for an administrator to assess. Acknowledging a concern
 records an operator note; it does not resolve the source, rebaseline an activity
 detector, repair a filesystem, or disconnect a node. This module does not predict
 hardware failure dates. Capacity warnings use observed utilization (warning at
@@ -276,6 +276,6 @@ Doc, complete HTTP authorization, and browser interaction validation belong to
 the root integration task.
 
 ```sh
-CARGO_INCREMENTAL=0 cargo test -p orchard-server --no-default-features --test attention_state --test notification_settings
-CARGO_INCREMENTAL=0 cargo test -p orchard-server --no-default-features --lib notifications::tests
+CARGO_INCREMENTAL=0 cargo test -p cider-server --no-default-features --test attention_state --test notification_settings
+CARGO_INCREMENTAL=0 cargo test -p cider-server --no-default-features --lib notifications::tests
 ```

@@ -1,6 +1,6 @@
 use axum::{body::{to_bytes, Body}, http::Request, Router};
 use chrono::{Duration, Utc};
-use orchard_server::{api, cider_api, cider_wire, read_api, store::AppState};
+use cider_server::{api, cider_api, cider_wire, read_api, store::AppState};
 use serde_json::{json, Value};
 use sqlx::Row;
 use tempfile::TempDir;
@@ -684,7 +684,7 @@ async fn retained_relationship_context_cannot_authorize_new_boot_disk_io() {
 async fn physical_removal_alerts_once_and_reappearance_allows_a_new_episode() {
     let h = Harness::new().await;
     let mut tx = h.state.db.begin().await.unwrap();
-    orchard_server::notifications::configure(&mut tx, &json!({"expected_revision":"initial",
+    cider_server::notifications::configure(&mut tx, &json!({"expected_revision":"initial",
         "enabled":true,"sender":"+15555550124","recipient":"+15555550123"}), "test", Utc::now().timestamp_millis()).await.unwrap();
     tx.commit().await.unwrap();
     let mut hb = h.heartbeat();
@@ -710,7 +710,7 @@ async fn physical_removal_alerts_once_and_reappearance_allows_a_new_episode() {
     assert_eq!(h.send(&hb).await.0, 200, "receipt retry is idempotent");
     hb["sequence"] = json!("4");
     assert_eq!(h.send(&hb).await.0, 200, "repeated tombstone is idempotent");
-    orchard_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
+    cider_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
     let (status, body) = request(&h.app, "GET", "/api/v1/attention?kind=drive_removal", ADMIN, Value::Null).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
@@ -768,5 +768,147 @@ async fn reboot_cleanup_and_driver_removal_do_not_raise_physical_drive_alerts() 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attention_episodes WHERE kind='drive_removal'")
             .fetch_one(&h.state.db).await.unwrap();
         assert_eq!(count, 0);
+    }
+}
+
+#[tokio::test]
+async fn prior_session_inventory_and_delayed_tombstones_cannot_open_drive_removal() {
+    for mode in ["session", "stale", "future"] {
+        let h = Harness::new().await;
+        let mut hb = h.heartbeat();
+        hb["collections"] = json!([]);
+        hb["collector_states"] = json!([]);
+        hb["resources"][0]["resource_type"] = json!("physical_device");
+        assert_eq!(h.send(&hb).await.0, 200);
+        hb["sequence"] = json!("2");
+        hb["inventory"]["revision"] = json!("2");
+        hb["resources"] = json!([]);
+        if mode == "session" {
+            hb["agent_generation"] = json!("2");
+            hb["agent_session_id"] = json!("new-session-same-boot");
+        }
+        let at = Utc::now() + Duration::seconds(match mode { "stale" => -120, "future" => 120, _ => 0 });
+        hb["tombstones"] = json!([{"entity_type":"resource","entity_id":"driver-1","revision":"2",
+            "observed_at":at.to_rfc3339(),"reason":"explicit removal"}]);
+        let result = h.send(&hb).await;
+        assert_eq!(result.0, 200, "{}", result.1);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attention_episodes WHERE kind='drive_removal'")
+            .fetch_one(&h.state.db).await.unwrap();
+        assert_eq!(count, 0, "{mode} is not fresh current-session disappearance evidence");
+    }
+}
+
+#[tokio::test]
+async fn explicit_nfs_unmount_is_distinct_from_network_failure_and_replay_is_idempotent() {
+    let h = Harness::new().await;
+    let mut hb = h.heartbeat();
+    hb["collections"] = json!([]);
+    hb["collector_states"] = json!([]);
+    hb["resources"][0]["resource_type"] = json!("mount");
+    hb["resources"][0]["attributes"] = json!({"filesystem_type":"nfs","mount_path":"/synthetic/nfs","source":"fixture.invalid:/export"});
+    let mut mount = hb["resources"][0].clone();
+    assert_eq!(h.send(&hb).await.0, 200);
+    hb["sequence"] = json!("2");
+    hb["resources"] = json!([]);
+    assert_eq!(h.send(&hb).await.0, 200);
+    hb["sequence"] = json!("3");
+    hb["inventory"]["revision"] = json!("2");
+    hb["tombstones"] = json!([{"entity_type":"resource","entity_id":"driver-1","revision":"2",
+        "observed_at":Utc::now().to_rfc3339(),"reason":"removed"}]);
+    assert_eq!(h.send(&hb).await.0, 200);
+    assert_eq!(h.send(&hb).await.0, 200);
+    cider_server::attention::reconcile(&h.state, Utc::now().timestamp_millis()).await.unwrap();
+    let (_, result) = request(&h.app, "GET", "/api/v1/attention?kind=filesystem", ADMIN, Value::Null).await;
+    let events: Vec<_> = result["data"].as_array().unwrap().iter()
+        .filter(|e| e["source_key"].as_str().is_some_and(|k| k.starts_with("mount_removal:"))).collect();
+    assert_eq!(events.len(), 1, "accepted explicit unmount must be visible once");
+    assert_eq!(events[0]["status"], "open");
+    assert_eq!(events[0]["observation_state"], "ok");
+    assert_eq!(events[0]["evidence"]["classification"], "nfs_mount_removed");
+    assert_eq!(events[0]["evidence"]["cause"], "unknown");
+    mount["revision"] = json!("3");
+    mount["observed_at"] = json!(Utc::now().to_rfc3339());
+    hb["sequence"] = json!("4");
+    hb["inventory"]["revision"] = json!("3");
+    hb["tombstones"] = json!([]);
+    hb["resources"] = json!([mount]);
+    assert_eq!(h.send(&hb).await.0, 200);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attention_episodes WHERE source_key LIKE 'mount_removal:%' AND status='resolved'")
+        .fetch_one(&h.state.db).await.unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn native_nfs_stall_notifies_once_and_failed_observation_cannot_resolve_it() {
+    let h = Harness::new().await;
+    let mut tx=h.state.db.begin().await.unwrap();
+    cider_server::notifications::configure(&mut tx,&json!({"expected_revision":"initial","enabled":true,
+        "sender":"+15555550100","recipient":"+15555550101"}),"test",Utc::now().timestamp_millis()).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut hb=h.heartbeat();
+    hb["resources"][0]["resource_type"]=json!("mount");
+    hb["resources"][0]["attributes"]=json!({"filesystem_type":"nfs","mount_path":"/synthetic/nfs","source":"fixture.invalid:/export"});
+    let mut flags=hb["collections"][0].clone();
+    flags["collector"]=json!("nfs.mount_status");
+    flags["collection_id"]=json!("flags-1");
+    flags["metrics"]=json!([{"name":"storage.nfs.mount.dead","kind":"state","unit":"1","value_type":"boolean","availability":"available","freshness":"live","value":false,"attributes":{}},
+        {"name":"storage.nfs.mount.not_responding","kind":"state","unit":"1","value_type":"boolean","availability":"available","freshness":"live","value":false,"attributes":{}}]);
+    let mut age=flags.clone();
+    age["collector"]=json!("nfs.nstatus");
+    age["collection_id"]=json!("age-1");
+    age["metrics"]=json!([{"name":"storage.nfs.mount.oldest_request_age_seconds","kind":"gauge","unit":"seconds","value_type":"integer","availability":"available","freshness":"live","value":"45","attributes":{}}]);
+    hb["collections"]=json!([flags,age]);
+    hb["collector_states"]=json!([{"collector":"nfs.mount_status","resource_id":"driver-1","phase":"idle","poll_interval_seconds":3,"stale_after_seconds":15,"last_attempt_id":"flags-1"},
+        {"collector":"nfs.nstatus","resource_id":"driver-1","phase":"idle","poll_interval_seconds":3,"stale_after_seconds":15,"last_attempt_id":"age-1"}]);
+    let result=h.send(&hb).await;assert_eq!(result.0,200,"{}",result.1);
+    for _ in 0..2 {cider_server::attention::reconcile(&h.state,Utc::now().timestamp_millis()).await.unwrap();}
+    let (_,body)=request(&h.app,"GET","/api/v1/attention?kind=filesystem",ADMIN,Value::Null).await;
+    let episodes=body["data"].as_array().unwrap();assert_eq!(episodes.len(),1,"{body}");
+    let id=episodes[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(episodes[0]["evidence"]["reason"],"nfs_requests_stalled");
+    assert_eq!(episodes[0]["notification"]["state"],"queued");
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM notification_outbox WHERE episode_id=?").bind(&id).fetch_one(&h.state.db).await.unwrap(),1);
+    for (sequence,status) in [(2,"failed"),(3,"ok")] {
+        hb["sequence"]=json!(sequence.to_string());hb["inventory"]["included"]=json!(false);hb["resources"]=json!([]);
+        for (index,prefix) in [(0,"flags"),(1,"age")] {
+            let at=Utc::now().to_rfc3339();
+            let c=&mut hb["collections"][index];c["collection_id"]=json!(format!("{prefix}-{sequence}"));
+            c["started_at"]=json!(at);c["finished_at"]=json!(at);
+            c["started_monotonic_ns"]=json!((sequence*5_000_000_000u64).to_string());
+            c["finished_monotonic_ns"]=c["started_monotonic_ns"].clone();
+            hb["collector_states"][index]["last_attempt_id"]=json!(format!("{prefix}-{sequence}"));
+        }
+        hb["monotonic_ns"]=json!((sequence*5_000_000_000u64+200_000_000).to_string());
+        hb["collections"][1]["status"]=json!(status);
+        hb["collections"][1]["metrics"]=if status=="failed" {json!([])} else {json!([{"name":"storage.nfs.mount.oldest_request_age_seconds","kind":"gauge","unit":"seconds","value_type":"integer","availability":"available","freshness":"live","value":"0","attributes":{}}])};
+        let result=h.send(&hb).await;assert_eq!(result.0,200,"{}",result.1);
+        cider_server::attention::reconcile(&h.state,Utc::now().timestamp_millis()).await.unwrap();
+        let (state,observation):(String,String)=sqlx::query_as("SELECT status,observation_state FROM attention_episodes WHERE id=?").bind(&id).fetch_one(&h.state.db).await.unwrap();
+        if status=="failed" {assert_eq!(state,"open");assert_ne!(observation,"current");}
+        else {assert_eq!(state,"resolved");assert_eq!(observation,"current");}
+    }
+}
+
+#[tokio::test]
+async fn fresh_upsert_recovers_after_stale_reappearance_for_drive_and_nfs() {
+    for nfs in [false,true] {
+        let h=Harness::new().await;
+        let mut hb=h.heartbeat();hb["collections"]=json!([]);hb["collector_states"]=json!([]);
+        hb["resources"][0]["resource_type"]=json!(if nfs {"mount"} else {"physical_device"});
+        hb["resources"][0]["attributes"]=if nfs {json!({"filesystem_type":"nfs"})} else {json!({})};
+        let mut resource=hb["resources"][0].clone();
+        assert_eq!(h.send(&hb).await.0,200);
+        hb["sequence"]=json!("2");hb["inventory"]["revision"]=json!("2");hb["resources"]=json!([]);
+        hb["tombstones"]=json!([{"entity_type":"resource","entity_id":"driver-1","revision":"2","observed_at":Utc::now().to_rfc3339(),"reason":"removed"}]);
+        assert_eq!(h.send(&hb).await.0,200);
+        for (revision,fresh) in [(3,false),(4,true)] {
+            resource["revision"]=json!(revision.to_string());
+            resource["observed_at"]=json!((Utc::now()-Duration::seconds(if fresh {0}else{120})).to_rfc3339());
+            hb["sequence"]=json!(revision.to_string());hb["inventory"]["revision"]=json!(revision.to_string());
+            hb["tombstones"]=json!([]);hb["resources"]=json!([resource]);
+            assert_eq!(h.send(&hb).await.0,200);
+            let states:Vec<String>=sqlx::query_scalar("SELECT status FROM attention_episodes WHERE source_key LIKE 'drive_removal:%' OR source_key LIKE 'mount_removal:%'").fetch_all(&h.state.db).await.unwrap();
+            assert_eq!(states,vec![if fresh {"resolved"}else{"open"}],"nfs={nfs}, fresh={fresh}");
+        }
     }
 }
