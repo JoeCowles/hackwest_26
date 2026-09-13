@@ -15,6 +15,170 @@ fn metric<'a>(result: &'a Collected, name: &str) -> &'a ciderd::model::Metric {
         .unwrap()
 }
 
+fn ata_smart(rows: Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "smartctl": {"version": [7, 5], "exit_status": 0},
+        "serial_number": "PRIVATE-ATA-SERIAL",
+        "model_name": "Example ATA Device",
+        "device": {"protocol": "ATA"},
+        "ata_smart_attributes": {"revision": 16, "table": rows}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn smart_ata_sector_attributes_emit_exact_nonmonotonic_gauges() {
+    let result = parse_smart(
+        include_bytes!("fixtures/smart-ata.json"),
+        0,
+        "device",
+        "epoch",
+    )
+    .unwrap();
+    for (name, value) in [
+        ("storage.ata.reallocated_sectors", "9007199254740993"),
+        ("storage.ata.current_pending_sectors", "2"),
+        ("storage.ata.offline_uncorrectable_sectors", "3"),
+    ] {
+        let reading = metric(&result, name);
+        assert_eq!(reading.kind, "gauge");
+        assert_eq!(reading.unit, "sectors");
+        assert_eq!(reading.value, Some(json!(value)));
+        assert_eq!(reading.counter_epoch, None);
+        assert_eq!(
+            reading.extensions.as_ref().unwrap()["device_identity_confidence"],
+            "reported_serial"
+        );
+        assert_eq!(
+            reading.extensions.as_ref().unwrap()["device_identity"]
+                .as_str()
+                .unwrap()
+                .len(),
+            36
+        );
+    }
+}
+
+#[test]
+fn smart_ata_absent_vendor_packed_and_duplicate_rows_never_become_counts() {
+    let absent = parse_smart(&ata_smart(json!([])), 0, "device", "epoch").unwrap();
+    assert!(!absent.samples[0]
+        .metrics
+        .iter()
+        .any(|reading| reading.name.starts_with("storage.ata.")));
+
+    let packed = parse_smart(
+        &ata_smart(json!([
+            {
+                "id": 197,
+                "name": "Current_Pending_Sector",
+                "value": 100,
+                "worst": 100,
+                "thresh": 0,
+                "raw": {"value": 4294967298_u64, "string": "2/1"}
+            },
+            {
+                "id": 198,
+                "name": "Vendor_Offline_Value",
+                "value": 100,
+                "worst": 100,
+                "thresh": 0,
+                "raw": {"value": 7, "string": "7"}
+            }
+        ])),
+        0,
+        "device",
+        "epoch",
+    )
+    .unwrap();
+    assert!(!packed.samples[0]
+        .metrics
+        .iter()
+        .any(|reading| reading.name.starts_with("storage.ata.")));
+
+    let duplicate = ata_smart(json!([
+        {
+            "id": 5,
+            "name": "Reallocated_Sector_Ct",
+            "value": 100,
+            "worst": 100,
+            "thresh": 10,
+            "raw": {"value": 1, "string": "1"}
+        },
+        {
+            "id": 5,
+            "name": "Reallocated_Sector_Ct",
+            "value": 100,
+            "worst": 100,
+            "thresh": 10,
+            "raw": {"value": 2, "string": "2"}
+        }
+    ]));
+    let duplicate = parse_smart(&duplicate, 0, "device", "epoch").unwrap();
+    assert_eq!(duplicate.samples[0].status, "partial");
+    assert!(!duplicate.samples[0]
+        .metrics
+        .iter()
+        .any(|reading| reading.name.starts_with("storage.ata.")));
+}
+
+#[test]
+fn ambiguous_ata_table_does_not_suppress_independent_overall_health() {
+    let mut value: Value = serde_json::from_slice(&ata_smart(json!([
+        {
+            "id": 197,
+            "name": "Current_Pending_Sector",
+            "value": 100,
+            "worst": 100,
+            "thresh": 0,
+            "raw": {"value": 2, "string": "2"}
+        },
+        {
+            "id": 197,
+            "name": "Current_Pending_Sector",
+            "value": 100,
+            "worst": 100,
+            "thresh": 0,
+            "raw": {"value": 3, "string": "3"}
+        }
+    ])))
+    .unwrap();
+    value["smart_status"] = json!({"passed": false});
+
+    let result = parse_smart(&serde_json::to_vec(&value).unwrap(), 0, "device", "epoch").unwrap();
+    assert_eq!(result.samples[0].status, "partial");
+    assert_eq!(
+        metric(&result, "storage.media.smart_passed").value,
+        Some(false.into())
+    );
+    assert!(!result.samples[0]
+        .metrics
+        .iter()
+        .any(|reading| reading.name.starts_with("storage.ata.")));
+}
+
+#[test]
+fn ata_exact_companion_must_not_contradict_an_exact_small_numeric_value() {
+    let result = parse_smart(
+        &ata_smart(json!([{
+            "id": 197,
+            "name": "Current_Pending_Sector",
+            "value": 100,
+            "worst": 100,
+            "thresh": 0,
+            "raw": {"value": 9, "value_s": "2", "string": "2"}
+        }])),
+        0,
+        "device",
+        "epoch",
+    )
+    .unwrap();
+    assert!(!result.samples[0]
+        .metrics
+        .iter()
+        .any(|reading| reading.name == "storage.ata.current_pending_sectors"));
+}
+
 #[test]
 fn smart_health_exit_bits_keep_exact_counters_and_celsius() {
     let result = parse_smart(
@@ -50,6 +214,69 @@ fn smart_health_exit_bits_keep_exact_counters_and_celsius() {
         .metrics
         .iter()
         .any(|m| m.name.contains("power_cycles")));
+    for reading in &result.samples[0].metrics {
+        let extensions = reading.extensions.as_ref().unwrap();
+        assert_eq!(extensions["smartctl_exit_status"], 8);
+        assert_eq!(extensions["smartctl_exit_status_class"], "device_report");
+        assert_eq!(
+            extensions["device_identity_confidence"],
+            "caller_epoch_only"
+        );
+        assert_eq!(extensions["device_identity"].as_str().unwrap().len(), 36);
+    }
+}
+
+#[test]
+fn smart_tool_exit_bits_remain_acquisition_errors_with_parsed_readings() {
+    let mut value: Value =
+        serde_json::from_slice(include_bytes!("fixtures/smart-nvme.json")).unwrap();
+    value["smartctl"]["exit_status"] = json!(1);
+    let result = parse_smart(&serde_json::to_vec(&value).unwrap(), 1, "device", "epoch").unwrap();
+    assert_eq!(result.samples[0].status, "partial");
+    assert_eq!(result.samples[0].exit_code, Some(1));
+    assert_eq!(
+        metric(&result, "storage.media.smart_passed")
+            .extensions
+            .as_ref()
+            .unwrap()["smartctl_exit_status_class"],
+        "tool_error"
+    );
+    assert_eq!(
+        metric(&result, "storage.media.smart_passed").value,
+        Some(false.into())
+    );
+}
+
+#[test]
+fn smart_locator_context_rejects_a_different_reported_device() {
+    let mut value: Value =
+        serde_json::from_slice(include_bytes!("fixtures/smart-nvme.json")).unwrap();
+    value["device"]["name"] = json!("/dev/disk0");
+    parse_smart_with_locator(
+        &serde_json::to_vec(&value).unwrap(),
+        8,
+        "device",
+        "epoch",
+        "/dev/disk0",
+    )
+    .unwrap();
+    assert!(parse_smart_with_locator(
+        &serde_json::to_vec(&value).unwrap(),
+        8,
+        "device",
+        "epoch",
+        "/dev/disk1",
+    )
+    .is_err());
+    value["device"]["name"] = json!("/dev/disk0/../disk1");
+    assert!(parse_smart_with_locator(
+        &serde_json::to_vec(&value).unwrap(),
+        8,
+        "device",
+        "epoch",
+        "/dev/disk0",
+    )
+    .is_err());
 }
 
 #[test]
@@ -132,6 +359,20 @@ fn smart_reported_identity_resets_every_counter_without_exposing_serial() {
                 .iter()
                 .all(|m| m.attributes.is_empty()));
         }
+        assert_eq!(
+            metric(&first, "storage.media.smart_passed").extensions,
+            metric(&repeated, "storage.media.smart_passed").extensions
+        );
+        assert_ne!(
+            metric(&first, "storage.media.smart_passed")
+                .extensions
+                .as_ref()
+                .unwrap()["device_identity"],
+            metric(&replaced, "storage.media.smart_passed")
+                .extensions
+                .as_ref()
+                .unwrap()["device_identity"]
+        );
     }
 }
 
@@ -151,6 +392,17 @@ fn smart_wwn_precedes_serial_and_missing_identity_keeps_caller_epoch() {
     assert_eq!(
         counter.extensions.as_ref().unwrap()["counter_identity"],
         "caller_epoch_only"
+    );
+    assert_eq!(
+        counter.extensions.as_ref().unwrap()["device_identity_confidence"],
+        "caller_epoch_only"
+    );
+    assert_eq!(
+        counter.extensions.as_ref().unwrap()["device_identity"]
+            .as_str()
+            .unwrap()
+            .len(),
+        36
     );
     value["wwn"] = json!({"naa":5,"oui":12345,"id":67890});
     value["serial_number"] = json!("serial-a");

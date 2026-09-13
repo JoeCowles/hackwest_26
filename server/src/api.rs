@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 type Body = Result<Json<Value>, JsonRejection>;
 
-/// Section 14 read/monitoring endpoints are deliberately not registered yet.
+/// Collector and administrator mutations; same-origin reads live in read_api.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/enrollment-tokens", post(create_token))
@@ -32,6 +32,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/nodes/{node_id}/heartbeat", post(heartbeat))
         .route("/api/v1/nodes/{node_id}/goodbye", post(goodbye))
         .route("/api/v1/nodes/{node_id}/credential", delete(revoke))
+        .route("/api/v1/detectors/storage-activity/sources/{source_id}/rebaseline", post(rebaseline_detection))
+        .route("/api/v1/attention/{episode_id}/acknowledgement", post(acknowledge_attention))
+        .route("/api/v1/notifications/settings", put(notification_settings))
         .fallback(|| async {
             ApiError::new(
                 StatusCode::NOT_FOUND,
@@ -207,6 +210,79 @@ async fn create_token(
     let cursor = store::change(&mut tx, "enrollment.created", None, json!({})).await?;
     tx.commit().await?;
     Ok(success(StatusCode::CREATED, token, request_id, cursor))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RebaselineRequest {
+    expected_baseline_revision: String,
+    reason: String,
+}
+
+async fn rebaseline_detection(
+    State(state): State<AppState>, Path(source_id): Path<String>, headers: HeaderMap, body: Body,
+) -> ApiResult<Response> {
+    Uuid::parse_str(&source_id).map_err(|_| ApiError::field("source_id", "Expected a source UUID"))?;
+    let (request, _): (RebaselineRequest, _) = parse(body)?;
+    let revision = request.expected_baseline_revision.parse::<u64>().ok()
+        .filter(|v| v.to_string() == request.expected_baseline_revision)
+        .ok_or_else(|| ApiError::field("expected_baseline_revision", "Expected a canonical unsigned-64-bit decimal string"))?;
+    if !matches!(request.reason.as_str(), "planned_workload_change" | "operator_reassessment") {
+        return Err(ApiError::field("reason", "Expected planned_workload_change or operator_reassessment"));
+    }
+    let _guard = state.writer.lock().await;
+    let mut tx = state.db.begin().await?;
+    // Distinguish authenticated read-only credentials from an invalid token,
+    // then reuse the administrator mutation authenticator and replay guard.
+    let token = headers.get("authorization").and_then(|h| h.to_str().ok()).and_then(|h| h.strip_prefix("Bearer ")).unwrap_or("");
+    let actor_hash = store::fingerprint(token.as_bytes());
+    if !bool::from(actor_hash.as_bytes().ct_eq(state.admin_hash.as_bytes())) {
+        let viewer_hash = store::fingerprint(state.viewer_token.as_bytes());
+        let viewer = bool::from(actor_hash.as_bytes().ct_eq(viewer_hash.as_bytes())) && Utc::now().timestamp_millis() < state.viewer_expires_at;
+        let node: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE credential_hash=? AND revoked_at IS NULL").bind(&actor_hash).fetch_one(&mut *tx).await?;
+        if viewer || node > 0 { return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "Relearning requires an administrator credential")); }
+    }
+    let request_id = authorize(&state, &mut tx, &headers, Role::Admin).await?;
+    let data = crate::detection_store::rebaseline(&mut tx, &source_id, revision, &request.reason, &actor_hash, Utc::now().timestamp_millis()).await?;
+    let change: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(change_id),0) FROM change_log").fetch_one(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(success(StatusCode::OK, data, request_id, change))
+}
+
+/// Apply the existing replay protection after distinguishing read-only identities.
+async fn operator_admin(state: &AppState, tx: &mut Transaction<'_, Sqlite>, headers: &HeaderMap) -> ApiResult<(String,String)> {
+    let token=headers.get("authorization").and_then(|h|h.to_str().ok()).and_then(|h|h.strip_prefix("Bearer ")).unwrap_or("");
+    let actor=store::fingerprint(token.as_bytes());
+    if !bool::from(actor.as_bytes().ct_eq(state.admin_hash.as_bytes())) {
+        let viewer_hash=store::fingerprint(state.viewer_token.as_bytes());
+        let viewer=bool::from(actor.as_bytes().ct_eq(viewer_hash.as_bytes())) && Utc::now().timestamp_millis()<state.viewer_expires_at;
+        let node:i64=sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE credential_hash=? AND revoked_at IS NULL").bind(&actor).fetch_one(&mut **tx).await?;
+        if viewer || node>0 {return Err(ApiError::new(StatusCode::FORBIDDEN,"forbidden","This change requires an administrator credential"));}
+    }
+    Ok((authorize(state,tx,headers,Role::Admin).await?,actor))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcknowledgementRequest {expected_revision:String, note:String}
+
+async fn acknowledge_attention(State(state):State<AppState>,Path(id):Path<String>,headers:HeaderMap,body:Body)->ApiResult<Response> {
+    let _guard=state.writer.lock().await;let mut tx=state.db.begin().await?;
+    let (request_id,actor)=operator_admin(&state,&mut tx,&headers).await?;
+    Uuid::parse_str(&id).map_err(|_|ApiError::field("episode_id","Expected an episode UUID"))?;
+    let (request,_):(AcknowledgementRequest,_)=parse(body)?;
+    let data=crate::attention::acknowledge(&mut tx,&id,&request.expected_revision,&request.note,&actor,Utc::now().timestamp_millis()).await?;
+    let cursor=store::change(&mut tx,"attention.acknowledged",None,json!({"episode_id":id,"revision":data["revision"]})).await?;
+    tx.commit().await?;Ok(success(StatusCode::OK,data,request_id,cursor))
+}
+
+async fn notification_settings(State(state):State<AppState>,headers:HeaderMap,body:Body)->ApiResult<Response> {
+    let _guard=state.writer.lock().await;let mut tx=state.db.begin().await?;
+    let (request_id,actor)=operator_admin(&state,&mut tx,&headers).await?;
+    let (request,_):(Value,_)=parse(body)?;
+    let data=crate::notifications::configure(&mut tx,&request,&actor,Utc::now().timestamp_millis()).await?;
+    let cursor=store::change(&mut tx,"notifications.configured",None,json!({"enabled":data["enabled"],"revision":data["revision"]})).await?;
+    tx.commit().await?;Ok(success(StatusCode::OK,data,request_id,cursor))
 }
 
 async fn enroll(

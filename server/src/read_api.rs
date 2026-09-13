@@ -12,6 +12,12 @@ const READ_ROUTES: &[&str] = &[
     "/api/v1/cluster", "/api/v1/nodes", "/api/v1/nodes/{node_id}",
     "/api/v1/nodes/{node_id}/inventory", "/api/v1/nodes/{node_id}/disks", "/api/v1/objects/{object_id}",
     "/api/v1/filesystems", "/api/v1/events", "/api/v1/capabilities",
+    "/api/v1/findings", "/api/v1/findings/{finding_id}",
+    "/api/v1/detectors/storage-activity/sources",
+    "/api/v1/reliability/sources", "/api/v1/reliability/findings", "/api/v1/reliability/findings/{finding_id}",
+    "/api/v1/attention", "/api/v1/attention/summary", "/api/v1/notifications/settings",
+    "/api/v1/quotas", "/api/v1/diagnostics",
+    "/api/v1/objects/{object_id}/history", "/api/v1/objects/{object_id}/capacity-forecast",
 ];
 const DIMENSIONS: &[&str] = &["availability", "capacity", "performance", "media_health", "filesystem_integrity", "security_activity", "recovery_readiness", "telemetry_freshness"];
 type Parameters = BTreeMap<String, String>;
@@ -74,8 +80,14 @@ async fn fonts_css() -> Response { asset("text/css; charset=utf-8", include_str!
 async fn javascript(Path(name): Path<String>) -> Response {
     let body = match name.as_str() {
         "app.js" => include_str!("../../web/js/app.js"),
+        "operator.js" => include_str!("../../web/js/operator.js"),
+        "operator-views.js" => include_str!("../../web/js/operator-views.js"),
         "storage.js" => include_str!("../../web/js/storage.js"),
         "storage-views.js" => include_str!("../../web/js/storage-views.js"),
+        "security.js" => include_str!("../../web/js/security.js"),
+        "security-views.js" => include_str!("../../web/js/security-views.js"),
+        "reliability.js" => include_str!("../../web/js/reliability.js"),
+        "reliability-views.js" => include_str!("../../web/js/reliability-views.js"),
         "rack.js" => include_str!("../../web/js/rack.js"),
         "api.js" => include_str!("../../web/js/api.js"),
         "session.js" => include_str!("../../web/js/session.js"),
@@ -161,9 +173,28 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
     let path = uri.path();
     let parts: Vec<_> = path.trim_matches('/').split('/').collect();
     let resource = parts.get(2).copied().unwrap_or("");
+    if resource == "reliability" {
+        return reliability_read(state, path, &parts, query, owner, request_id).await;
+    }
+    if matches!(resource, "findings" | "detectors") {
+        return detection_read(state, path, &parts, query, owner, request_id).await;
+    }
+    if matches!(resource, "attention" | "notifications" | "quotas" | "diagnostics") {
+        return operator_read(state, path, query, owner, request_id).await;
+    }
     let id = parts.get(3).copied();
     if let Some(id) = id { Uuid::parse_str(id).map_err(|_| query_error("id", "Expected a resource UUID"))?; }
     let subresource = parts.get(4).copied();
+    if resource == "objects" && matches!(subresource, Some("history" | "capacity-forecast")) {
+        let now = Utc::now().timestamp_millis();
+        let (data, meta) = if subresource == Some("history") {
+            crate::history::read(&state.app, id.ok_or_else(not_found)?, &query, now).await?
+        } else {
+            if let Some(key) = query.keys().next() {return Err(query_error(key, "Unknown query parameter"));}
+            (crate::history::forecast(&state.app, id.ok_or_else(not_found)?, now).await?, json!({}))
+        };
+        return Ok(response(data, now, &change_cursor(&state.app).await?, None, request_id, &meta));
+    }
     let inventory = resource == "nodes" && subresource == Some("inventory");
     let disks = resource == "nodes" && subresource == Some("disks");
     let list = inventory || disks || (id.is_none() && matches!(resource, "nodes" | "filesystems" | "events"));
@@ -176,7 +207,7 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
     for key in query.keys() { if !allowed.contains(&key.as_str()) { return Err(query_error(key, "Unknown query parameter")); } }
     validate_enum(&query, "availability", &["online", "degraded", "offline", "unknown"])?;
     validate_enum(&query, "health", &["healthy", "warning", "critical", "unknown"])?;
-    validate_enum(&query, "kind", &["node", "device", "partition", "apfs_store", "apfs_container", "apfs_volume", "snapshot", "mount", "nfs_mount", "provider"])?;
+    validate_enum(&query, "kind", &["node", "device", "partition", "apfs_store", "apfs_container", "apfs_volume", "snapshot", "mount", "nfs_mount", "quota", "provider"])?;
     validate_enum(&query, "classification", &["local", "network", "removable"])?;
     validate_enum(&query, "category", &["inventory", "availability", "storage", "security", "collector", "alert"])?;
     validate_enum(&query, "severity", &["info", "warning", "critical"])?;
@@ -205,7 +236,7 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         ("capabilities", None, _) => json!({
             "api_version":"1","service_version":env!("CARGO_PKG_VERSION"),"heartbeat_interval_seconds":5,
             "availability_thresholds_seconds":{"degraded":30,"offline":90},"poll_interval_seconds":5,"hidden_poll_interval_seconds":30,
-            "implemented_read_routes":READ_ROUTES,"features":{"current_inventory":true,"physical_disks":true,"typed_storage_topology":true,"hardware_models":true,"historical_inventory":false,"events":true,"alerts":false,"sse":false,"metric_history":false,"prometheus":false,"openapi":false},
+            "implemented_read_routes":READ_ROUTES,"features":{"current_inventory":true,"physical_disks":true,"typed_storage_topology":true,"hardware_models":true,"historical_inventory":false,"events":true,"storage_activity_detection":true,"drive_reliability":true,"reliability_findings":true,"replacement_forecasts":false,"findings":true,"alerts":true,"twilio_notifications":true,"notification_configuration":"administrator_dashboard","nfs_user_quotas":true,"diagnostics_readiness":true,"capacity_forecasts":true,"sse":false,"metric_history":true,"prometheus":false,"openapi":false},
             "viewer_credential_expires_at":store::timestamp(state.app.viewer_expires_at),"viewer_scope":"telemetry:read","browser_transport":"same_origin",
             "limits":{"default_page_size":100,"maximum_page_size":500,"cursor_ttl_seconds":300,"read_requests_per_minute":120,"read_burst":20}
         }),
@@ -237,6 +268,52 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         _ => return Err(not_found()),
     };
     if !list { return Ok(response(data, snapshot.time, &snapshot.change, None, request_id, &metadata)); }
+    list_response(state, path, query, owner, data, snapshot.time, snapshot.change, limit, request_id, metadata)
+}
+
+async fn change_cursor(app: &AppState) -> ApiResult<String> {
+    let id: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(change_id),0) FROM change_log").fetch_one(&app.db).await?;
+    Ok(id.to_string())
+}
+
+async fn operator_read(state: &ReadState, path: &str, mut query: Parameters, owner: String, request_id: &str) -> ApiResult<Response> {
+    let allowed: &[&str] = match path {
+        "/api/v1/attention" => &["node_id","object_id","status","kind","severity","acknowledged","limit","cursor"],
+        "/api/v1/quotas" => &["node_id","uid","limit","cursor"],
+        "/api/v1/diagnostics" => &["node_id","limit","cursor"],
+        "/api/v1/attention/summary" | "/api/v1/notifications/settings" => &[],
+        _ => return Err(not_found()),
+    };
+    for key in query.keys() {if !allowed.contains(&key.as_str()) {return Err(query_error(key,"Unknown query parameter"));}}
+    for key in ["node_id","object_id"] {if let Some(id)=query.get(key) {Uuid::parse_str(id).map_err(|_|query_error(key,"Expected a resource UUID"))?;}}
+    validate_enum(&query,"status",&["open","resolved","all"])?;
+    validate_enum(&query,"severity",&["info","warning","critical"])?;
+    validate_enum(&query,"acknowledged",&["true","false"])?;
+    validate_enum(&query,"kind",&["activity","reliability","capacity","node_loss","filesystem"])?;
+    if let Some(uid)=query.get("uid") {
+        if uid.parse::<u32>().ok().filter(|n|*n<=i32::MAX as u32 && n.to_string()==*uid).is_none() {return Err(query_error("uid","Expected a canonical UID in 0..2147483647"));}
+    }
+    let limit = query.get("limit").map(|v|v.parse::<usize>().ok().filter(|n|(1..=500).contains(n)))
+        .unwrap_or(Some(100)).ok_or_else(||query_error("limit","Expected 1-500"))?;
+    if let Some(cursor)=query.remove("cursor") {return page(state,path,&query,&owner,&cursor,limit,request_id);}
+    let now=Utc::now().timestamp_millis();
+    let (data,meta,list)=match path {
+        "/api/v1/attention" => {let (d,m)=crate::attention::list(&state.app,&query,now).await?;(d,m,true)},
+        "/api/v1/quotas" => {let (d,m)=crate::quota::list(&state.app,&query,now).await?;(d,m,true)},
+        "/api/v1/diagnostics" => {let (d,m)=crate::diagnostics::list(&state.app,&query,now).await?;(d,m,true)},
+        "/api/v1/attention/summary" => (crate::attention::summary(&state.app,now).await?,json!({}),false),
+        "/api/v1/notifications/settings" => (crate::notifications::settings(&state.app).await?,json!({}),false),
+        _ => return Err(not_found()),
+    };
+    let change=change_cursor(&state.app).await?;
+    if list {list_response(state,path,query,owner,data,now,change,limit,request_id,meta)}
+    else {Ok(response(data,now,&change,None,request_id,&meta))}
+}
+
+// All collections share the same bounded frozen-page cache and credential scope.
+#[allow(clippy::too_many_arguments)]
+fn list_response(state: &ReadState, path: &str, query: Parameters, owner: String, data: Value,
+    time: i64, change: String, limit: usize, request_id: &str, metadata: Value) -> ApiResult<Response> {
     let values = data.as_array().expect("list route");
     let next = if values.len() > limit {
         let bytes = data.to_string().len() + metadata.to_string().len();
@@ -246,11 +323,217 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
             return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Pagination cache is full; retry later"));
         }
         let key = Uuid::new_v4().to_string();
-        let expires = snapshot.time + 300_000;
-        pages.insert(key.clone(), Page { owner, path: path.into(), query, expires, time: snapshot.time, change: snapshot.change.clone(), values: Arc::new(values.clone()), bytes, metadata: metadata.clone() });
+        let expires = time + 300_000;
+        pages.insert(key.clone(), Page { owner, path: path.into(), query, expires, time, change: change.clone(), values: Arc::new(values.clone()), bytes, metadata: metadata.clone() });
         Some(format!("{key}.{expires}.{limit}"))
     } else { None };
-    Ok(response(json!(values.iter().take(limit).collect::<Vec<_>>()), snapshot.time, &snapshot.change, next, request_id, &metadata))
+    Ok(response(json!(values.iter().take(limit).collect::<Vec<_>>()), time, &change, next, request_id, &metadata))
+}
+
+async fn detection_read(state: &ReadState, path: &str, parts: &[&str], mut query: Parameters,
+    owner: String, request_id: &str) -> ApiResult<Response> {
+    let sources = path == "/api/v1/detectors/storage-activity/sources";
+    let finding_id = if parts.get(2) == Some(&"findings") { parts.get(3).copied() } else { None };
+    let list = sources || (parts.len() == 3 && parts[2] == "findings");
+    if let Some(id) = finding_id { Uuid::parse_str(id).map_err(|_| query_error("finding_id", "Expected a finding UUID"))?; }
+    let allowed: &[&str] = if sources { &["node_id", "object_id", "limit", "cursor"] }
+        else if list { &["node_id", "object_id", "status", "from", "to", "limit", "cursor"] } else { &[] };
+    for key in query.keys() { if !allowed.contains(&key.as_str()) { return Err(query_error(key, "Unknown query parameter")); } }
+    for key in ["node_id", "object_id"] { if let Some(id) = query.get(key) { Uuid::parse_str(id).map_err(|_| query_error(key, "Expected a resource UUID"))?; } }
+    validate_enum(&query, "status", &["open", "resolved", "interrupted", "all"])?;
+    let limit = match query.get("limit") {
+        Some(n) => n.parse::<usize>().ok().filter(|n| (1..=500).contains(n)).ok_or_else(|| query_error("limit", "Expected 1-500"))?,
+        None => 100,
+    };
+    // Validate time filters even on subsequent page requests; absent bounds keep
+    // old open episodes visible. A half-open range applies to first_seen_at.
+    let from = parse_time(&query, "from", i64::MIN)?;
+    let to = parse_time(&query, "to", i64::MAX)?;
+    if from >= to { return Err(query_error("from/to", "from must precede to")); }
+    if let Some(cursor) = query.remove("cursor") { return page(state, path, &query, &owner, &cursor, limit, request_id); }
+    let mut tx = state.app.db.begin().await?;
+    let change: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(change_id),0) FROM change_log").fetch_one(&mut *tx).await?;
+    let now = Utc::now().timestamp_millis();
+    let (data, metadata) = if sources {
+        let values = crate::detection_store::source_summaries_filtered(&mut tx, now,
+            query.get("node_id").map(String::as_str), query.get("object_id").map(String::as_str)).await?;
+        let count = |predicate: fn(&Value) -> bool| values.iter().filter(|v| predicate(v)).count();
+        let coverage = json!({"known_sources":values.len(),"active_sources":count(|v|v["active"]==true),
+            "supported_sources":count(|v|v["active"]==true && v["support_state"]=="supported"),
+            "capacity_limited_sources":count(|v|v["active"]==true && v["support_state"]=="capacity_limited"),
+            "learning_sources":count(|v|v["active"]==true && v["support_state"]=="supported" && v["baseline"]["state"]=="learning"),
+            "ready_sources":count(|v|v["active"]==true && v["support_state"]=="supported" && v["baseline"]["state"]=="ready"),
+            "current_sources":count(|v|v["active"]==true && v["observation"]["state"]=="current"),
+            "security_assessment":"unknown","inventory_completeness":"unknown"});
+        (json!(values), json!({"policy":crate::detection::Policy::default(),"coverage":coverage}))
+    } else {
+        let status = query.get("status").map(String::as_str).unwrap_or("open");
+        let rows = sqlx::query("SELECT finding_json FROM detection_findings WHERE (? IS NULL OR finding_id=?) AND (? IS NOT NULL OR ?='all' OR status=?) AND (? IS NULL OR node_id=?) AND (? IS NULL OR object_id=?) AND first_seen_at>=? AND first_seen_at<? ORDER BY first_seen_at DESC,finding_id DESC LIMIT 10001")
+            .bind(finding_id).bind(finding_id).bind(finding_id).bind(status).bind(status)
+            .bind(query.get("node_id")).bind(query.get("node_id")).bind(query.get("object_id")).bind(query.get("object_id"))
+            .bind(from).bind(to).fetch_all(&mut *tx).await?;
+        if rows.len() > 10000 { return Err(query_error("filters", "Narrow the filters to at most 10000 findings")); }
+        let values = rows.iter().map(|r| value(r, "finding_json")).collect::<ApiResult<Vec<_>>>()?;
+        (if list {json!(values)} else {values.into_iter().next().ok_or_else(not_found)?}, json!({}))
+    };
+    tx.commit().await?;
+    if list { list_response(state, path, query, owner, data, now, change.to_string(), limit, request_id, metadata) }
+    else { Ok(response(data, now, &change.to_string(), None, request_id, &metadata)) }
+}
+
+async fn reliability_read(
+    state: &ReadState,
+    path: &str,
+    parts: &[&str],
+    mut query: Parameters,
+    owner: String,
+    request_id: &str,
+) -> ApiResult<Response> {
+    let sources = path == "/api/v1/reliability/sources";
+    let finding_id = if parts.get(3) == Some(&"findings") {
+        parts.get(4).copied()
+    } else {
+        None
+    };
+    let list = sources || (parts.len() == 4 && parts[3] == "findings");
+    if let Some(id) = finding_id {
+        Uuid::parse_str(id).map_err(|_| query_error("finding_id", "Expected a finding UUID"))?;
+    }
+    let allowed: &[&str] = if sources {
+        &["node_id", "object_id", "limit", "cursor"]
+    } else if list {
+        &[
+            "node_id",
+            "object_id",
+            "status",
+            "from",
+            "to",
+            "limit",
+            "cursor",
+        ]
+    } else {
+        &[]
+    };
+    for key in query.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(query_error(key, "Unknown query parameter"));
+        }
+    }
+    for key in ["node_id", "object_id"] {
+        if let Some(id) = query.get(key) {
+            Uuid::parse_str(id).map_err(|_| query_error(key, "Expected a resource UUID"))?;
+        }
+    }
+    validate_enum(
+        &query,
+        "status",
+        &["open", "resolved", "interrupted", "all"],
+    )?;
+    let limit = match query.get("limit") {
+        Some(n) => n
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=500).contains(n))
+            .ok_or_else(|| query_error("limit", "Expected 1-500"))?,
+        None => 100,
+    };
+    // Validate time filters even on subsequent page requests; absent bounds keep
+    // old open episodes visible. A half-open range applies to first_seen_at.
+    let from = parse_time(&query, "from", i64::MIN)?;
+    let to = parse_time(&query, "to", i64::MAX)?;
+    if from >= to {
+        return Err(query_error("from/to", "from must precede to"));
+    }
+    if let Some(cursor) = query.remove("cursor") {
+        return page(state, path, &query, &owner, &cursor, limit, request_id);
+    }
+    let mut tx = state.app.db.begin().await?;
+    let change: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(change_id),0) FROM change_log")
+        .fetch_one(&mut *tx)
+        .await?;
+    let now = Utc::now().timestamp_millis();
+    let (data, metadata) = if sources {
+        let values = crate::reliability_store::source_summaries_filtered(
+            &mut tx,
+            now,
+            query.get("node_id").map(String::as_str),
+            query.get("object_id").map(String::as_str),
+        )
+        .await?;
+        let count = |predicate: fn(&Value) -> bool| values.iter().filter(|v| predicate(v)).count();
+        let coverage = json!({"known_sources":values.len(),"active_sources":count(|v|v["active"]==true),
+            "supported_sources":count(|v|v["active"]==true && v["support_state"]=="supported"),
+            "capacity_limited_sources":count(|v|v["active"]==true && v["support_state"]=="capacity_limited"),
+            "current_sources":count(|v|v["active"]==true && v["observation"]["state"]=="current"),
+            "assessment":"unknown","inventory_completeness":"unknown"});
+        (
+            json!(values),
+            json!({"policy":crate::reliability::Policy::default(),"coverage":coverage}),
+        )
+    } else {
+        let status = query.get("status").map(String::as_str).unwrap_or("open");
+        let (count, bytes):(i64,i64) = sqlx::query_as("SELECT COUNT(*),COALESCE(SUM(length(CAST(finding_json AS BLOB))),0) FROM (SELECT finding_json FROM reliability_findings WHERE (? IS NULL OR finding_id=?) AND (? IS NOT NULL OR ?='all' OR status=?) AND (? IS NULL OR node_id=?) AND (? IS NULL OR object_id=?) AND first_seen_at>=? AND first_seen_at<? ORDER BY first_seen_at DESC,finding_id DESC LIMIT 10001)")
+            .bind(finding_id).bind(finding_id).bind(finding_id).bind(status).bind(status)
+            .bind(query.get("node_id")).bind(query.get("node_id")).bind(query.get("object_id")).bind(query.get("object_id"))
+            .bind(from).bind(to).fetch_one(&mut *tx).await?;
+        if count > 10000 {
+            return Err(query_error(
+                "filters",
+                "Narrow the filters to at most 10000 findings",
+            ));
+        }
+        if bytes > 32 * 1024 * 1024 {
+            return Err(unavailable(
+                "Finding selection exceeds bounded read capacity; narrow the filters",
+            ));
+        }
+        let rows = sqlx::query("SELECT finding_json FROM reliability_findings WHERE (? IS NULL OR finding_id=?) AND (? IS NOT NULL OR ?='all' OR status=?) AND (? IS NULL OR node_id=?) AND (? IS NULL OR object_id=?) AND first_seen_at>=? AND first_seen_at<? ORDER BY first_seen_at DESC,finding_id DESC LIMIT 10001")
+            .bind(finding_id).bind(finding_id).bind(finding_id).bind(status).bind(status)
+            .bind(query.get("node_id")).bind(query.get("node_id")).bind(query.get("object_id")).bind(query.get("object_id"))
+            .bind(from).bind(to).fetch_all(&mut *tx).await?;
+        if rows.len() > 10000 {
+            return Err(query_error(
+                "filters",
+                "Narrow the filters to at most 10000 findings",
+            ));
+        }
+        let values = rows
+            .iter()
+            .map(|r| value(r, "finding_json"))
+            .collect::<ApiResult<Vec<_>>>()?;
+        (
+            if list {
+                json!(values)
+            } else {
+                values.into_iter().next().ok_or_else(not_found)?
+            },
+            json!({}),
+        )
+    };
+    tx.commit().await?;
+    if list {
+        list_response(
+            state,
+            path,
+            query,
+            owner,
+            data,
+            now,
+            change.to_string(),
+            limit,
+            request_id,
+            metadata,
+        )
+    } else {
+        Ok(response(
+            data,
+            now,
+            &change.to_string(),
+            None,
+            request_id,
+            &metadata,
+        ))
+    }
 }
 
 fn validate_enum(query: &Parameters, key: &str, choices: &[&str]) -> ApiResult<()> {
@@ -359,7 +642,27 @@ fn health(availability: &str, capacity: &Value) -> Value {
     }
     let overall = ["critical", "warning", "healthy"].into_iter().find(|status| dimensions.values().any(|d| d["status"] == *status)).unwrap_or("unknown");
     let missing: Vec<_> = DIMENSIONS.iter().filter(|d| dimensions[**d]["status"] == "unknown").copied().collect();
-    json!({"overall":overall,"dimensions":dimensions,"unknown_dimensions":missing})
+    let mut result=json!({"overall":overall,"dimensions":dimensions,"unknown_dimensions":missing});
+    finish_assessment(&mut result);
+    result
+}
+fn finish_assessment(health: &mut Value) {
+    let incomplete=health["unknown_dimensions"].as_array().is_none_or(|v|!v.is_empty());
+    health["assessment_state"]=json!(if incomplete {"incomplete"} else {"complete"});
+    health["observed_severity"]=json!(match health["overall"].as_str() {Some("critical")=>"critical",Some("warning")=>"warning",_=>"none"});
+    if incomplete && health["overall"]=="healthy" {health["overall"]=json!("unknown");}
+}
+fn apply_security_warning(health: &mut Value, sources: &[Value]) {
+    let evidence: Vec<_> = sources.iter().filter(|source| source["active"] == true
+        && source["support_state"] == "supported" && source["episode"]["state"] == "open"
+        && source["observation"]["state"] == "current")
+        .map(|source| json!({"finding_id":source["episode"]["finding_id"],"source_id":source["source_id"],
+            "node_id":source["node_id"],"object_id":source["object_id"],"direction":source["direction"],
+            "observed_at":source["observation"]["observed_at"]})).collect();
+    if evidence.is_empty() { return; }
+    health["dimensions"]["security_activity"] = json!({"status":"warning","reasons":["sustained_storage_activity_deviation"],"evidence":evidence});
+    if health["overall"] != "critical" { health["overall"] = json!("warning"); }
+    if let Some(unknown) = health["unknown_dimensions"].as_array_mut() { unknown.retain(|v| v != "security_activity"); }
 }
 fn freshness(name: &str) -> i64 {
     if name.starts_with("device_") && (name.contains("_total") || name.contains("_per_second")) { 15 }
@@ -477,6 +780,49 @@ fn parse_time(query: &Parameters, key: &str, default: i64) -> ApiResult<i64> {
     match query.get(key) { None => Ok(default), Some(text) => chrono::DateTime::parse_from_rfc3339(text).map(|d| d.timestamp_millis()).map_err(|_| query_error(key, "Expected an RFC3339 timestamp")) }
 }
 
+/// Reuse the same committed, aged object projection for operator features.
+pub(crate) async fn current_objects(app: &AppState) -> ApiResult<(Vec<Value>, Vec<Value>)> {
+    let view = snapshot(app, false, &Parameters::new()).await?;
+    Ok((view.nodes, view.objects))
+}
+
+/// Capacity concerns operate on coherent pool/filesystem observers, never an
+/// additive list of APFS volumes or all observers of the same NFS filesystem.
+pub(crate) async fn attention_capacity_inputs(app: &AppState) -> ApiResult<Vec<Value>> {
+    let (_, objects) = current_objects(app).await?;
+    let active: Vec<_> = objects.iter().filter(|o| o["active"] == true).collect();
+    let mut selected: BTreeMap<String, &Value> = local_capacity_objects(&active).into_iter()
+        .map(|o| (local_attention_key(o), o)).collect();
+    for object in active.into_iter().filter(|o| o["kind"] == "nfs_mount") {
+        let p = &object["properties"];
+        if p["shared_filesystem_authoritative"] == true {
+            if let Some(id) = p["shared_filesystem_id"].as_str().filter(|id| !id.is_empty()) {
+                select_capacity_observer(&mut selected, format!("shared:{id}"), object);
+            }
+        }
+    }
+    Ok(selected.into_iter().map(|(key, o)| json!({"key":key,"node_id":o["node_id"],
+        "object_id":o["object_id"],"capacity":filesystem_capacity(o)})).collect())
+}
+
+fn local_attention_key(object: &Value) -> String {
+    if object["kind"]=="mount" {
+        if let (Some(node),Some(filesystem))=(object["node_id"].as_str(),object["properties"]["filesystem_id"].as_str()) {
+            return format!("local:{node}:{filesystem}");
+        }
+    }
+    format!("local:{}",object["object_id"].as_str().unwrap_or(""))
+}
+
+#[test]
+fn local_filesystem_attention_identity_survives_observer_selection() {
+    let mut a=json!({"object_id":"observer-a","node_id":"node-a","kind":"mount","properties":{"filesystem_id":"same-fs"}});
+    let mut b=a.clone();b["object_id"]=json!("observer-b");
+    assert_eq!(local_attention_key(&a),local_attention_key(&b));
+    b["node_id"]=json!("node-b");assert_ne!(local_attention_key(&a),local_attention_key(&b));
+    a["kind"]=json!("apfs_container");b=a.clone();b["object_id"]=json!("other-pool");assert_ne!(local_attention_key(&a),local_attention_key(&b));
+}
+
 async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> ApiResult<Snapshot> {
     let mut tx = app.db.begin().await?;
     let change: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(change_id),0) FROM change_log").fetch_one(&mut *tx).await?;
@@ -505,6 +851,17 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
     let inventory_times = sqlx::query("SELECT node_id,MAX(updated) AS updated FROM (SELECT node_id,received_at AS updated FROM inventory_generations UNION ALL SELECT node_id,json_extract(state_json,'$.inventory_updated_at') AS updated FROM cider_nodes) WHERE updated IS NOT NULL GROUP BY node_id").fetch_all(&mut *tx).await?;
     let native_rows=sqlx::query("SELECT node_id,json_extract(state_json,'$.generation') AS agent_generation,json_extract(state_json,'$.session') AS agent_session_id FROM cider_nodes").fetch_all(&mut *tx).await?;
     let native:BTreeMap<String,Value>=native_rows.iter().map(|r|(r.get("node_id"),json!({"agent_generation":r.get::<String,_>("agent_generation"),"agent_session_id":r.get::<String,_>("agent_session_id")}))).collect();
+    let detection_sources = crate::detection_store::current_warning_summaries(&mut tx, now).await?;
+    let reliability_sources = crate::reliability_store::active_summaries(&mut tx, now).await?;
+    let reliability_findings:Vec<Value> = reliability_sources.iter().flat_map(|s|s["findings"].as_array().into_iter().flatten().cloned()).collect();
+    let mut detection_by_node: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut detection_by_object: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for source in &detection_sources {
+        if source["active"] == true && source["episode"]["state"] == "open" && source["observation"]["state"] == "current" {
+            if let Some(id) = source["node_id"].as_str() { detection_by_node.entry(id.into()).or_default().push(source.clone()); }
+            if let Some(id) = source["object_id"].as_str() { detection_by_object.entry(id.into()).or_default().push(source.clone()); }
+        }
+    }
     tx.commit().await?;
     let metadata: HashMap<String, (Option<String>, String)> = node_rows.iter().map(|r| (r.get("node_id"), (r.get("boot_id"), r.get::<i64, _>("inventory_generation").to_string()))).collect();
     let mut by_object: HashMap<String, Vec<Value>> = HashMap::new();
@@ -559,6 +916,7 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
             for key in ["read_bytes_per_second", "write_bytes_per_second", "temperature_celsius"] { if node[key]["state"] == "ok" { node[key]["state"] = json!("stale"); } }
             for key in ["capacity_bytes", "used_bytes", "free_bytes", "available_bytes", "used_ratio"] { if node["capacity"][key]["state"] == "ok" { node["capacity"][key]["state"] = json!("stale"); } }
         }
+        if let Some(sources) = detection_by_node.get(&id) { apply_security_warning(&mut node["health"], sources); }
         nodes.push(node);
     }
     let online_ids: BTreeSet<_> = nodes.iter().filter(|n| n["availability"] == "online").filter_map(|n| n["node_id"].as_str()).collect();
@@ -583,12 +941,21 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
         }
     }
     let mut disks=BTreeMap::new();let mut normalized=Vec::new();
+    let mut current_reliability=Vec::new();
     for node in &nodes {
         let mut input=node.clone();input["_snapshot_time"]=json!(now);
         let mut index=crate::disk_view::build_disk_index(&input,&objects.iter().filter(|o|o["node_id"]==node["node_id"]).cloned().collect::<Vec<_>>());
+        for disk in &mut index.disks {
+            disk["reliability"]=crate::reliability_view::disk_assessment(node,disk,&index.objects,&reliability_sources,&reliability_findings);
+            disk["diagnostics"]=crate::diagnostics::disk(node,disk["object_id"].as_str().unwrap_or(""),&index.objects,now);
+            current_reliability.extend(disk["reliability"]["findings"].as_array().into_iter().flatten().filter(|f|f["current"]==true).cloned());
+        }
         normalized.append(&mut index.objects);disks.insert(node["node_id"].as_str().unwrap_or("").to_owned(),index);
     }
     objects=normalized;objects.sort_by(|a,b|a["object_id"].as_str().cmp(&b["object_id"].as_str()));
+    for object in &mut objects {
+        if let Some(sources) = object["object_id"].as_str().and_then(|id|detection_by_object.get(id)) { apply_security_warning(&mut object["health"], sources); }
+    }
     let active: Vec<_> = objects.iter().filter(|o| o["active"] == true && online_ids.contains(o["node_id"].as_str().unwrap_or(""))).collect();
     let local = local_capacity_objects(&active); let mut shared = BTreeMap::new(); let mut unresolved = 0;
     for object in objects.iter().filter(|o|o["active"] == true && o["kind"] == "nfs_mount") {
@@ -605,14 +972,23 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
     for node in &nodes { let key = node["availability"].as_str().unwrap_or("unknown"); counts[key] = json!(counts[key].as_u64().unwrap_or(0)+1); }
     let local_cap = capacity(&local);
     let contributors: BTreeSet<_> = local.iter().filter(|o| integer(&metric(o,"capacity_bytes","bytes")).is_some()).filter_map(|o|o["node_id"].as_str()).collect();
-    let excluded: Vec<_> = nodes.iter().filter_map(|n|n["node_id"].as_str()).filter(|id|!contributors.contains(id)).collect();
+    let excluded: Vec<_> = nodes.iter().filter_map(|n|n["node_id"].as_str()).filter(|id|!contributors.contains(id)).map(str::to_owned).collect();
     let cluster_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, app.admin_hash.as_bytes()).to_string();
+    let observed_node_count=online_ids.len();
+    for node in &mut nodes {
+        let owned:Vec<_>=current_reliability.iter().filter(|f|f["node_id"]==node["node_id"]).cloned().collect();
+        crate::reliability_view::apply_health(&mut node["health"],&owned);
+        finish_assessment(&mut node["health"]);
+    }
     let cluster_health = ["critical","warning","healthy"].into_iter().find(|status|nodes.iter().any(|n|n["health"]["overall"]==*status)).unwrap_or("unknown");
     let mut overall_health = health("unknown",&local_cap); overall_health["overall"] = json!(cluster_health);
+    apply_security_warning(&mut overall_health, &detection_sources);
+    crate::reliability_view::apply_health(&mut overall_health,&current_reliability);
+    finish_assessment(&mut overall_health);
     let cluster = json!({"cluster_id":cluster_id,"node_counts":counts,"health":overall_health,"capacity":{"local":local_cap,"shared":capacity(&shared.into_values().collect::<Vec<_>>()),
         "unresolved_shared_mounts":unresolved,"contributing_node_ids":contributors,"excluded_node_ids":excluded},
         "throughput":{"read_bytes_per_second":aggregate(nodes.iter().map(|n|n["read_bytes_per_second"].clone()).collect(),"bytes/second",false),"write_bytes_per_second":aggregate(nodes.iter().map(|n|n["write_bytes_per_second"].clone()).collect(),"bytes/second",false)},
-        "active_alert_counts":{"warning":null,"critical":null},"alerts_available":false,"observed_node_count":online_ids.len(),"expected_node_count":nodes.len()});
+        "active_alert_counts":{"warning":null,"critical":null},"alerts_available":false,"observed_node_count":observed_node_count,"expected_node_count":nodes.len()});
     let filesystems = objects.iter().filter(|o| o["active"] == true && matches!(o["kind"].as_str(), Some("apfs_volume"|"mount"|"nfs_mount"))).map(|object| {
         let p = &object["properties"];
         let kind = p["filesystem_type"].as_str().unwrap_or(if object["kind"] == "nfs_mount" {"nfs"} else if object["kind"] == "apfs_volume" {"apfs"} else {"unknown"});

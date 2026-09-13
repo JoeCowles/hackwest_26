@@ -10,6 +10,22 @@ use uuid::Uuid;
 const ADMIN: &str = "compatibility-test-admin";
 const LARGE: u128 = u64::MAX as u128 + 1000;
 
+#[tokio::test]
+async fn native_user_quota_is_separate_from_volume_capacity_and_keeps_exact_usage() {
+    let h=Harness::new().await;
+    let mut hb=h.heartbeat();
+    hb["resources"][0]["resource_type"]=json!("nfs_user_quota");
+    hb["resources"][0]["attributes"]=json!({"server":"127.0.0.1","export_path":"/export","uid":"1000","protocol":"rquota-v1-udp"});
+    hb["collections"][0]["collector"]=json!("nfs.rquota");
+    hb["collector_states"][0]["collector"]=json!("nfs.rquota");
+    hb["collections"][0]["metrics"]=json!([{"name":"storage.nfs.quota.used_bytes","kind":"gauge","unit":"bytes",
+        "availability":"available","attributes":{},"freshness":"live","value_type":"integer","value":LARGE.to_string()}]);
+    assert_eq!(h.send(&hb).await.0,200);
+    let object=h.device().await;
+    assert_eq!(object["kind"],"quota");
+    assert_eq!(object["latest_metrics"]["nfs_quota_used_bytes"]["value"],LARGE.to_string());
+}
+
 struct Harness {
     directory: TempDir,
     state: AppState,
@@ -212,7 +228,7 @@ async fn missing_inventory_is_requested_and_committed_receipts_survive_reopen() 
     let result = request(&routes(&reopened), "POST", "/api/v2/ciderd/heartbeat", &h.credential, full).await;
     assert_eq!(result, (200, ack));
     let version: i64 = sqlx::query_scalar("PRAGMA user_version").fetch_one(&reopened.db).await.unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 5);
 }
 
 #[tokio::test]

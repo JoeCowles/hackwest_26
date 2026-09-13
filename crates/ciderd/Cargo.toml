@@ -1,5 +1,6 @@
 [package]
 name = "ciderd"
+license.workspace = true
 description = "macOS storage telemetry collectors and latest-state heartbeat daemon"
 version.workspace = true
 edition.workspace = true

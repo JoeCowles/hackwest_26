@@ -194,6 +194,10 @@ async fn heartbeat(
         receiver.inventory_updated_at = Some(now);
     }
     let graph_known = receiver.inventory == Some(hb.inventory.revision);
+    crate::detection_store::reconcile_sources(&mut tx, &node_id, &hb.boot_id,
+        &hb.agent_generation.to_string(), &hb.agent_session_id, &receiver.graph.resources, now).await?;
+    crate::reliability_store::reconcile_sources(&mut tx, &node_id, &hb.boot_id,
+        &hb.agent_generation.to_string(), &hb.agent_session_id, &receiver.graph.resources, now).await?;
     let mut stored_samples = 0usize;
     let mut collections: Vec<&Collection> = hb.collections.iter().collect();
     collections.sort_by_key(|c| c.finished_monotonic_ns);
@@ -213,6 +217,9 @@ async fn heartbeat(
                         stored_samples += project_metric(&mut tx, &hb, &receiver, resource, collection, &used, now).await?;
                     }
                 }
+                // Every accepted attempt matters, even when no field could be projected.
+                crate::detection_store::observe_collection(&mut tx, &hb, resource, collection, now).await?;
+                crate::reliability_store::observe_collection(&mut tx, &hb, resource, collection, now).await?;
                 mark_projected(&mut tx, &node_id, "collection", &collection.collection_id).await?;
             }
         }
@@ -337,6 +344,7 @@ fn object_kind(resource: &Resource) -> &'static str {
         "mount" if resource.attributes.get("filesystem_type").and_then(Value::as_str) == Some("nfs") => "nfs_mount",
         "mount" | "filesystem" => "mount",
         "snapshot" => "snapshot",
+        "nfs_user_quota" => "quota",
         _ => "provider",
     }
 }
@@ -433,6 +441,9 @@ fn metric_name(metric: &Metric) -> &str {
         "storage.device.write_operations_total" => "device_write_ops_total",
         "storage.device.read_errors_total" => "device_read_errors_total",
         "storage.device.write_errors_total" => "device_write_errors_total",
+        "storage.ata.reallocated_sectors" => "ata_reallocated_sectors",
+        "storage.ata.current_pending_sectors" => "ata_current_pending_sectors",
+        "storage.ata.offline_uncorrectable_sectors" => "ata_offline_uncorrectable_sectors",
         "storage.device.read_retries_total" => "device_read_retries_total",
         "storage.device.write_retries_total" => "device_write_retries_total",
         "storage.device.read_accounted_time_nanoseconds_total" => "device_read_time_ns_total",
@@ -456,6 +467,17 @@ fn metric_name(metric: &Metric) -> &str {
         "storage.nfs.client.operations_total" => "nfs_operations_total",
         "storage.nfs.client.rpc_timeouts_total" => "nfs_rpc_timeouts_total",
         "storage.nfs.client.rpc_retries_total" => "nfs_retransmissions_total",
+        "storage.nfs.quota.status" => "nfs_quota_status",
+        "storage.nfs.quota.active" => "nfs_quota_active",
+        "storage.nfs.quota.used_bytes" => "nfs_quota_used_bytes",
+        "storage.nfs.quota.block_soft_limit_bytes" => "nfs_quota_block_soft_limit_bytes",
+        "storage.nfs.quota.block_hard_limit_bytes" => "nfs_quota_block_hard_limit_bytes",
+        "storage.nfs.quota.used_inodes" => "nfs_quota_used_inodes",
+        "storage.nfs.quota.inode_soft_limit" => "nfs_quota_inode_soft_limit",
+        "storage.nfs.quota.inode_hard_limit" => "nfs_quota_inode_hard_limit",
+        "storage.nfs.quota.block_grace_seconds_raw" => "nfs_quota_block_grace_seconds_raw",
+        "storage.nfs.quota.inode_grace_seconds_raw" => "nfs_quota_inode_grace_seconds_raw",
+        "storage.nfs.quota.block_size_bytes" => "nfs_quota_block_size_bytes",
         _ => &metric.name,
     }
 }
@@ -567,7 +589,11 @@ async fn update_collector_states(tx: &mut Transaction<'_, Sqlite>, hb: &Heartbea
             let same=previous.filter(|old|s.last_attempt_id.as_ref().is_some_and(|id|old["last_attempt"]["collection_id"]==*id));
             let attempt = s.last_attempt_id.as_ref().and_then(|id| hb.collections.iter().find(|c| c.collection_id == *id));
             let last=same.map(|old|old["last_attempt"].clone()).or_else(||attempt.map(|c|json!({"collection_id":c.collection_id,"status":c.status,"finished_at":c.finished_at,"error":c.error})));
-            let context=same.map(|old|old["acquisition"].clone()).or_else(||attempt.filter(|c|c.clock_id==hb.clock_id).map(|c|acquisition(hb,&c.finished_at,&BTreeMap::new(),now)));
+            let context=same.map(|old|old["acquisition"].clone()).or_else(||attempt.filter(|c|c.clock_id==hb.clock_id).map(|c| {
+                let mut context=acquisition(hb,&c.finished_at,&BTreeMap::new(),now);
+                context["age_at_receipt_seconds"]=json!((hb.monotonic_ns.get()-c.finished_monotonic_ns.get()) as f64/1_000_000_000.0);
+                context
+            }));
             json!({"state":s,"last_attempt":last,"acquisition":context,"reported_at":hb.created_at})
         }).collect();
         if !states.is_empty() {

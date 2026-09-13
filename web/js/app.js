@@ -4,15 +4,18 @@ import { parseRoute, readSnapshot, readDisks, StorageInventory, storageSnapshotA
 import { TITLES } from './data.js';
 import { clusterVM, appendPollHistory } from './model.js';
 import { appendDiskHistory } from './storage.js';
+import { SecurityPages } from './security.js';
+import { SecurityView } from './security-views.js';
+import { OperationsView, AttentionIndicator } from './operator-views.js';
 import { rackPage } from './rack.js';
 import { loadThree, bootStage } from './stage.js';
-import { Sidebar, Topbar, Connection, Overview, Filesystem, Throughput, Access, HostDetail } from './views.js';
+import { Sidebar, Topbar, Connection, Overview, Filesystem, Throughput, HostDetail } from './views.js';
 
-const route = () => ({diskId:null, ...parseRoute(location.hash)});
+const route = () => ({diskId:null, objectId:null, ...parseRoute(location.hash)});
 class App extends Component {
   constructor(props) {
     super(props);
-    this.state = { ...route(), snapshot: null, collection: null, inventory: null, diskSummary: null, diskHistory: {}, rackPageIndex: 0, coreFreshAt: 0, coreWallAt: 0, tokenDraft: '', connected: false, busy: false, error: '', lastSuccess: null, clock: '', glReady: false, glFailed: false, hoverId: null, history: [], nodeHistory: {} };
+    this.state = { ...route(), snapshot: null, collection: null, security: null, inventory: null, diskSummary: null, diskHistory: {}, rackPageIndex: 0, coreFreshAt: 0, coreWallAt: 0, tokenDraft: '', connected: false, busy: false, error: '', lastSuccess: null, clock: '', glReady: false, glFailed: false, hoverId: null, history: [], nodeHistory: {} };
     this.storageBudget={requests:[]}; this.client = null; this.stage = null; this.stageKey = ''; this.stageRef = { current: null }; this.epoch = 0;
   }
   componentDidMount() {
@@ -30,6 +33,12 @@ class App extends Component {
     document.removeEventListener('visibilitychange', this.onVisible); this.teardownStage();
   }
   componentDidUpdate() {
+    const objectKey = this.state.view === 'node' && this.state.objectId ? `${this.state.nodeId}:${this.state.objectId}` : '';
+    const target = objectKey && this.state.inventory?.matching ? document.getElementById(`storage-object-${this.state.objectId}`) : null;
+    if (target && this.objectAnchorKey !== objectKey) {
+      this.objectAnchorKey = objectKey;
+      target.scrollIntoView({ block: 'center' });
+    } else if (!objectKey) this.objectAnchorKey = '';
     const nodes = clusterVM(this.state.snapshot, this.coreStale()).nodes;
     const page = rackPage(nodes,this.state.rackPageIndex);
     const key = page.nodes.map(n => `${n.id}:${n.state}:${n.kind}:${n.name}`).join('|');
@@ -48,18 +57,18 @@ class App extends Component {
   teardownStage() { this.stage?.dispose(); this.stage = null; this.stageKey = ''; }
   go(view, nodeId = this.state.nodeId) {
     history.pushState(null, '', view === 'node' && nodeId ? `#node/${encodeURIComponent(nodeId)}` : `#${view}`);
-    this.setState({ view, nodeId, diskId:null, hoverId: null, rackPageIndex:rackPage(this.state.snapshot?.nodes || [],this.state.rackPageIndex,view==='node' || this.state.view==='node' ? nodeId : null).pageIndex }, () => { window.scrollTo(0, 0); this.ensureViewData(); this.refreshSoon(); });
+    this.setState({ view, nodeId, diskId:null, objectId:null, hoverId: null, rackPageIndex:rackPage(this.state.snapshot?.nodes || [],this.state.rackPageIndex,view==='node' || this.state.view==='node' ? nodeId : null).pageIndex }, () => { window.scrollTo(0, 0); this.ensureViewData(); this.refreshSoon(); });
   }
   connect(event) {
     event.preventDefault(); const token = this.state.tokenDraft.trim();
     if (!token.startsWith('viewer_')) { this.setState({ error: 'Use the read-only viewer credential from Orchard Server, not an administrator or node credential.' }); return; }
     this.stopViewData(); this.client?.close(); clearTimeout(this.pollTimer); this.epoch += 1; this.inFlight = false;
     this.client = new ApiClient(token); this.failures = 0; this.retryAt = 0;
-    this.setState({ tokenDraft: '', connected: true, snapshot: null, collection: null, inventory: null, diskSummary: null, diskHistory: {}, error: '', lastSuccess: null, history: [], nodeHistory: {} }, () => this.poll());
+    this.setState({ tokenDraft: '', connected: true, attentionSummary:null, snapshot: null, collection: null, security: null, inventory: null, diskSummary: null, diskHistory: {}, error: '', lastSuccess: null, history: [], nodeHistory: {} }, () => this.poll());
   }
   disconnect(message = '') {
     this.epoch += 1; this.stopViewData(); this.client?.close(); this.client = null; this.inFlight = false; clearTimeout(this.pollTimer);
-    this.setState({ connected: false, snapshot: null, collection: null, inventory: null, diskSummary: null, diskHistory: {}, tokenDraft: '', error: message, busy: false, lastSuccess: null, history: [], nodeHistory: {} });
+    this.setState({ connected: false, attentionSummary:null, snapshot: null, collection: null, security: null, inventory: null, diskSummary: null, diskHistory: {}, tokenDraft: '', error: message, busy: false, lastSuccess: null, history: [], nodeHistory: {} });
   }
   coreStale() {
     const s = this.state;
@@ -67,6 +76,7 @@ class App extends Component {
   }
   stopViewData() {
     this.table?.close(); this.table = null; this.tableKey = '';
+    this.securityPages?.close(); this.securityPages = null;
     this.storageLoader?.close(); this.storageLoader=null; this.storageKey='';
     this.diskClient?.close(); this.diskClient=null;
     clearTimeout(this.diskTimer); clearTimeout(this.storageTimer);
@@ -74,7 +84,9 @@ class App extends Component {
   ensureViewData() {
     if (!this.client || this.disposed) return;
     const node = this.state.snapshot?.nodes.find(n => n.node_id === this.state.nodeId);
-    const config = viewCollection(this.state.view, node?.node_id);
+    // Security owns three independent frozen cursor reads. Do not also start the
+    // legacy single event table while that view is active.
+    const config = this.state.view === 'sec' ? null : viewCollection(this.state.view, node?.node_id);
     const key = config ? JSON.stringify(config) : '';
     if (key !== this.tableKey) {
       this.table?.close(); this.table = null; this.tableKey = key;
@@ -86,7 +98,22 @@ class App extends Component {
         this.table = table; table.refresh();
       }
     }
+    this.ensureSecurity();
     this.ensureStorage(node);
+  }
+  ensureSecurity() {
+    if (this.state.view !== 'sec') {
+      if (this.securityPages) { this.securityPages.close(); this.securityPages = null; this.setState({ security: null }); }
+      return;
+    }
+    if (this.securityPages) return;
+    const auth = () => this.disconnect('Viewer credential expired or was rejected. Copy a current viewer credential from the server.');
+    const pages = new SecurityPages(this.client.token, security => {
+      if (this.securityPages === pages) this.setState({ security });
+    }, auth);
+    this.securityPages = pages;
+    this.setState({ security: pages.snapshot() });
+    pages.refreshAll();
   }
   ensureStorage(node) {
     const key=this.state.view==='node' && node ? node.node_id : '';
@@ -213,13 +240,15 @@ class App extends Component {
       : s.view === 'overview' ? html`<${Overview} vm=${vm} a=${actions}/>`
       : s.view === 'fs' ? html`<${Filesystem} vm=${vm} paging=${paging}/>`
       : s.view === 'io' ? html`<${Throughput} vm=${vm} history=${s.history}/>`
-      : s.view === 'sec' ? html`<${Access} vm=${vm} paging=${paging}/>`
+      : s.view === 'sec' ? html`<${SecurityView} security=${s.security || {}} nodes=${vm.nodes} now=${performance.now()} wallNow=${Date.now()}/>`
+      : s.view === 'ops' ? html`<${OperationsView} key=${this.epoch} client=${this.client} route=${{section:s.operation || 'attention',objectId:s.objectId}} objectId=${s.objectId} attentionSummary=${s.attentionSummary}/>`
       : html`<${HostDetail} vm=${vm} node=${selected} storage=${{nodeId:selected?.id,summary:s.diskSummary,inventory,diskId:s.diskId,history:s.diskHistory[`${s.nodeId}:${s.diskId}`] || [],snapshotAgeMs:storageSnapshotAge(s.diskSummary),refresh:()=>this.storageLoader?.refresh(s.diskSummary?.meta?.inventory_generation,true),current:!stale && !!inventory?.matching && topologyStamp(inventory?.meta)===topologyStamp(s.diskSummary?.meta) && (!selectedNode?.boot_id || selectedNode.boot_id===s.diskSummary?.meta?.boot_id) && !inventory?.error && !!s.diskSummary && !s.diskSummary.error && storageSnapshotAge(s.diskSummary)<MAX_SNAPSHOT_AGE_MS}} paging=${paging} history=${s.nodeHistory[selected?.id] || []} open=${actions.open}/>`;
     return html`<div class="shell">
       <${Sidebar} view=${s.view} nodeCount=${vm.nodes.length} go=${view => this.go(view)}/>
       <main class="main"><${Topbar} title=${TITLES[s.view]} vm=${vm} clock=${s.clock} connected=${s.connected} disconnect=${() => this.disconnect()}/>
         <div class="content">
           ${s.connected ? html`<div class=${'connection-status ' + (stale ? 'is-error' : '')} role="status"><span>${s.error ? `Core updates unavailable: ${s.error} Current summary values are hidden.` : stale && s.snapshot ? 'Core snapshot is older than 15 seconds. Current summary values are hidden while refreshing.' : `${s.busy ? 'Refreshing' : 'Connected'} to ${location.origin}. Core summaries poll every ${document.hidden ? 30 : 5} seconds; tables have separate snapshot controls.`}</span><span>Last success: ${s.lastSuccess ? new Date(s.lastSuccess).toLocaleTimeString() : 'none'}</span></div>` : null}
+          ${s.connected ? html`<${AttentionIndicator} key=${this.epoch} client=${this.client} onAuth=${()=>this.disconnect('Viewer credential expired or was rejected.')} onSummary=${attentionSummary=>this.setState({attentionSummary})}/>` : null}
           ${content}
         </div>
       </main>

@@ -3,6 +3,7 @@
 [workspace]
 
 [package]
+license = "MIT"
 name = "simple-nfs-server"
 version = "0.1.0"
 edition = "2024"

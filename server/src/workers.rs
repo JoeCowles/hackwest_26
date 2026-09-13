@@ -61,6 +61,8 @@ pub async fn maintain(state: &AppState, now: i64) -> ApiResult<()> {
         .await?;
     sqlx::query("DELETE FROM inventory_generations WHERE generation NOT IN (SELECT generation FROM inventory_generations recent WHERE recent.node_id=inventory_generations.node_id ORDER BY generation DESC LIMIT 64)").execute(&mut *tx).await?;
     crate::cider_api::retain(&mut tx, now).await?;
+    crate::detection_store::retain(&mut tx, now).await?;
+    crate::reliability_store::retain(&mut tx, now).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -86,6 +88,12 @@ pub async fn run(state: AppState, stop: CancellationToken) {
             }
         }
         ticks += 1;
+        if let Err(e) = crate::attention::reconcile(&state, Utc::now().timestamp_millis()).await {
+            tracing::error!(error=?e,"Attention reconciliation failed");
+            if crate::attention::record_reconcile_failure(&state, Utc::now().timestamp_millis()).await.is_err() {
+                tracing::error!("Unable to record attention worker failure");
+            }
+        }
         match sqlx::query("SELECT (SELECT COUNT(*) FROM nodes) AS nodes,(SELECT COUNT(*) FROM metric_samples) AS samples,(SELECT COUNT(*) FROM batches) AS batches").fetch_one(&state.db).await {
             Ok(row)=>{if let Ok(mut stats)=state.statistics.write(){*stats=Statistics{nodes:row.get("nodes"),samples:row.get("samples"),batches:row.get("batches"),last_maintenance:last_maintenance.clone(),error:error.clone()};}}
             Err(e)=>{tracing::error!(error=%e,"Statistics refresh failed");if let Ok(mut stats)=state.statistics.write(){stats.error=Some("Database unavailable".to_owned());}}

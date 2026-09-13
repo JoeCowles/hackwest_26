@@ -2,16 +2,27 @@
 import { NAV } from './data.js';
 
 export function parseRoute(hash) {
-  const [candidate, encodedId, diskPart, encodedDisk] = hash.replace(/^#\/?/, '').split('/');
+  const [candidate, encodedId, detailPart, encodedDetail] = hash.replace(/^#\/?/, '').split('/');
   const view = NAV.some(([, , id]) => id === candidate) ? candidate : 'overview';
+  if(view==='ops') {
+    const operation=['attention','notifications','quotas','diagnostics','history'].includes(encodedId)?encodedId:'attention';
+    let objectId=null;
+    try{if(operation==='history' && detailPart)objectId=decodeURIComponent(detailPart);}catch{/* invalid object link remains unselected */}
+    return {view,nodeId:null,operation,objectId};
+  }
   let nodeId = null;
   if (view === 'node' && encodedId) {
     try { nodeId = decodeURIComponent(encodedId); } catch { /* malformed link: show host selection */ }
   }
-  if (view === 'node' && diskPart === 'disk') {
+  if (view === 'node' && detailPart === 'disk') {
     let diskId = null;
-    try { if (nodeId && encodedDisk) diskId = decodeURIComponent(encodedDisk); } catch { /* malformed disk link */ }
+    try { if (nodeId && encodedDetail) diskId = decodeURIComponent(encodedDetail); } catch { /* malformed disk link */ }
     return { view, nodeId, diskId };
+  }
+  if (view === 'node' && detailPart === 'object') {
+    let objectId = null;
+    try { if (nodeId && encodedDetail) objectId = decodeURIComponent(encodedDetail); } catch { /* malformed source-object link */ }
+    return { view, nodeId, objectId };
   }
   return { view, nodeId };
 }

@@ -19,7 +19,7 @@ use std::{
 use tokio::{
     sync::{mpsc, watch},
     task::{JoinHandle, JoinSet},
-    time::{interval, MissedTickBehavior},
+    time::{MissedTickBehavior, interval},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +30,7 @@ enum Kind {
     Mounts,
     MountIdentity,
     Nfs,
+    NfsQuota,
     NfsStatus,
     Capacity,
     Smart,
@@ -86,7 +87,7 @@ pub(crate) fn start(
         session,
         os_build,
     });
-    [Kind::Inventory,Kind::Apfs,Kind::Iokit,Kind::Mounts,Kind::MountIdentity,Kind::Nfs,Kind::NfsStatus,Kind::Capacity,Kind::Smart,Kind::Snapshots].into_iter().map(|kind| {
+    [Kind::Inventory,Kind::Apfs,Kind::Iokit,Kind::Mounts,Kind::MountIdentity,Kind::Nfs,Kind::NfsQuota,Kind::NfsStatus,Kind::Capacity,Kind::Smart,Kind::Snapshots].into_iter().map(|kind| {
         let config=config.clone();let worker=worker.clone();let context=context.clone();let clock=clock.clone();let runners=runners.clone();let snapshots=snapshots.clone();let messages=messages.clone();let mut stopping=stopping.clone();
         tokio::spawn(async move {
             let seconds=period(kind,&config);let mut ticks=interval(Duration::from_secs(1));ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -109,8 +110,8 @@ pub(crate) fn start(
                             let scope=(job.resource.clone(),job.generation.clone());
                             if inflight.contains(&scope){continue;}
                             if next_due.get(&job.resource).is_some_and(|due|*due>tokio::time::Instant::now()){continue;}
-                            let (class,timeout)=match kind {Kind::Iokit|Kind::Mounts=>(1,2),Kind::Capacity|Kind::NfsStatus|Kind::MountIdentity=>(2,3),Kind::Smart|Kind::Apfs|Kind::Snapshots=>(0,30),_=>(0,10)};
-                            let executable=match kind {Kind::Iokit|Kind::Mounts|Kind::Capacity|Kind::NfsStatus|Kind::MountIdentity=>worker.clone(),Kind::Nfs=>"/usr/bin/nfsstat".into(),Kind::Smart=>match config.tools.smartctl.clone(){Some(p)=>p,None=>continue},_=>"/usr/sbin/diskutil".into()};
+                            let (class,timeout)=match kind {Kind::NfsQuota=>(2,config.nfs_quotas.timeout_seconds+1),Kind::Iokit|Kind::Mounts=>(1,2),Kind::Capacity|Kind::NfsStatus|Kind::MountIdentity=>(2,3),Kind::Smart|Kind::Apfs|Kind::Snapshots=>(0,30),_=>(0,10)};
+                            let executable=match kind {Kind::NfsQuota|Kind::Iokit|Kind::Mounts|Kind::Capacity|Kind::NfsStatus|Kind::MountIdentity=>worker.clone(),Kind::Nfs=>"/usr/bin/nfsstat".into(),Kind::Smart=>match config.tools.smartctl.clone(){Some(p)=>p,None=>continue},_=>"/usr/sbin/diskutil".into()};
                             let stdin=job.request.as_ref().and_then(|r|serde_json::to_vec(r).ok());
                             let args=if job.request.is_some(){vec!["worker".into()]}else{job.args.clone()};
                             let spec=CommandSpec{executable,args,stdin,timeout:Duration::from_secs(timeout),scope:format!("{}:{}:{}",job.collector,job.resource,job.generation)};
@@ -145,6 +146,7 @@ fn period(kind: Kind, c: &Config) -> u64 {
         Kind::Iokit => c.collection.io_seconds,
         Kind::Mounts => c.collection.mount_inventory_seconds,
         Kind::Nfs => c.collection.nfs_counters_seconds,
+        Kind::NfsQuota => c.nfs_quotas.interval_seconds,
         Kind::NfsStatus => c.collection.nfs_status_seconds,
         Kind::Capacity | Kind::MountIdentity => c.collection.capacity_seconds,
         Kind::Smart => c.collection.smart_seconds,
@@ -159,6 +161,7 @@ fn jobs(kind: Kind, c: &Config, snapshot: &Heartbeat, node: &str) -> Vec<Job> {
         Kind::Iokit => "iokit.block",
         Kind::Mounts => "mount.inventory",
         Kind::Nfs => "nfs.client",
+        Kind::NfsQuota => "nfs.rquota",
         Kind::NfsStatus => "nfs.status",
         Kind::Capacity => "filesystem.capacity",
         Kind::MountIdentity => "mount.identity",
@@ -176,6 +179,30 @@ fn jobs(kind: Kind, c: &Config, snapshot: &Heartbeat, node: &str) -> Vec<Job> {
         mount: None,
     };
     match kind {
+        Kind::NfsQuota => {
+            return c
+                .nfs_quotas
+                .targets
+                .iter()
+                .filter_map(|target| {
+                    let id = target.resource_id(node);
+                    if !snapshot
+                        .resources
+                        .iter()
+                        .any(|r| r.resource_id == id && r.resource_type == "nfs_user_quota")
+                    {
+                        return None;
+                    }
+                    let mut job = base.clone();
+                    job.resource = id;
+                    job.request = Some(WorkerRequest::NfsQuota {
+                        target: target.clone(),
+                        timeout_seconds: c.nfs_quotas.timeout_seconds,
+                    });
+                    Some(job)
+                })
+                .collect();
+        }
         Kind::Inventory => {
             base.args = ["list", "-plist", "physical"]
                 .into_iter()
@@ -409,6 +436,7 @@ fn parse(job: &Job, output: &CommandOutput, context: &ContextInfo) -> Result<Col
         Kind::Iokit => collectors::parse_iokit(&output.stdout, &context.node, &context.boot),
         Kind::Mounts => collectors::parse_mounts(&output.stdout, &context.node, &context.boot),
         Kind::Nfs => collectors::parse_nfs(&output.stdout, &context.node, &context.boot),
+        Kind::NfsQuota => collectors::parse_nfs_quota(&output.stdout, &job.resource),
         Kind::NfsStatus => collectors::parse_nfs_status(&output.stdout, &job.resource),
         Kind::Capacity => collectors::parse_capacity(&output.stdout, &job.resource),
         Kind::MountIdentity => collectors::parse_mount_identity(
@@ -417,7 +445,7 @@ fn parse(job: &Job, output: &CommandOutput, context: &ContextInfo) -> Result<Col
                 .as_ref()
                 .context("missing mount identity context")?,
         ),
-        Kind::Smart => collectors::parse_smart(
+        Kind::Smart => collectors::parse_smart_with_locator(
             &output.stdout,
             output
                 .exit_code
@@ -425,6 +453,10 @@ fn parse(job: &Job, output: &CommandOutput, context: &ContextInfo) -> Result<Col
                 .context("missing SMART exit status")?,
             &job.resource,
             &format!("{}/{}/{}", context.session, job.resource, job.generation),
+            job.args
+                .last()
+                .and_then(|value| value.to_str())
+                .context("missing admitted SMART locator")?,
         ),
         Kind::Snapshots => collectors::parse_snapshots(&output.stdout, &job.resource),
     }
@@ -932,11 +964,13 @@ mod tests {
         );
         assert_eq!(current.attributes["source_generation"], source_generation);
         assert_eq!(current.attributes["association_state"], "resolved");
-        assert!(state
-            .metadata
-            .relationships
-            .values()
-            .any(|r| r.relation == "mounts"));
+        assert!(
+            state
+                .metadata
+                .relationships
+                .values()
+                .any(|r| r.relation == "mounts")
+        );
     }
 
     #[test]
@@ -948,11 +982,13 @@ mod tests {
             &mut state,
             identity_update(&mount, "unavailable", Some("mount_replaced"), &clock),
         );
-        assert!(!state
-            .metadata
-            .relationships
-            .values()
-            .any(|r| r.relation == "mounts"));
+        assert!(
+            !state
+                .metadata
+                .relationships
+                .values()
+                .any(|r| r.relation == "mounts")
+        );
         let late = identity_update(&mount, "ok", None, &clock);
         let mut empty = mount_update(BOOT_MOUNTS, &clock);
         empty.collected = Some(Collected {
@@ -967,14 +1003,18 @@ mod tests {
             mount.attributes["mount_generation"].as_str().unwrap()
         );
         apply(&mut state, late);
-        assert!(!state.metadata.resources[&mount.resource_id]
-            .attributes
-            .contains_key("mount_identity"));
-        assert!(!state
-            .metadata
-            .relationships
-            .values()
-            .any(|r| r.relation == "mounts"));
+        assert!(
+            !state.metadata.resources[&mount.resource_id]
+                .attributes
+                .contains_key("mount_identity")
+        );
+        assert!(
+            !state
+                .metadata
+                .relationships
+                .values()
+                .any(|r| r.relation == "mounts")
+        );
     }
 
     #[test]
@@ -1065,9 +1105,11 @@ mod tests {
             let stale = &state.metadata.relationships[&edge.relationship_id];
             assert_eq!(stale.attributes.as_ref().unwrap()["state"], "stale");
             assert_eq!(stale.observed_at, edge.observed_at);
-            assert!(state.metadata.groups["derived.storage"]
-                .iter()
-                .all(|id| state.metadata.relationships.contains_key(id)));
+            assert!(
+                state.metadata.groups["derived.storage"]
+                    .iter()
+                    .all(|id| state.metadata.relationships.contains_key(id))
+            );
         }
     }
 
@@ -1193,16 +1235,20 @@ mod tests {
                 ..Default::default()
             });
             apply(&mut state, removed);
-            assert!(!state
-                .metadata
-                .relationships
-                .values()
-                .any(|r| r.relation == "attached_to"));
-            assert!(state
-                .metadata
-                .resources
-                .values()
-                .any(|r| r.resource_type == "controller"));
+            assert!(
+                !state
+                    .metadata
+                    .relationships
+                    .values()
+                    .any(|r| r.relation == "attached_to")
+            );
+            assert!(
+                state
+                    .metadata
+                    .resources
+                    .values()
+                    .any(|r| r.resource_type == "controller")
+            );
         }
     }
 
@@ -1261,8 +1307,10 @@ mod tests {
             ..Default::default()
         });
         apply(&mut state, late_identity);
-        assert!(!state.metadata.resources[&id]
-            .attributes
-            .contains_key("mount_identity"));
+        assert!(
+            !state.metadata.resources[&id]
+                .attributes
+                .contains_key("mount_identity")
+        );
     }
 }

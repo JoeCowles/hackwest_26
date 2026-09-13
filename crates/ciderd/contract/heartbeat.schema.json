@@ -539,7 +539,8 @@
             "process",
             "network_interface",
             "storage_pool",
-            "provider_resource"
+            "provider_resource",
+            "nfs_user_quota"
           ]
         },
         "revision": {

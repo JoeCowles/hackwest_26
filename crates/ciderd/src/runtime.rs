@@ -3,14 +3,14 @@
 use crate::{
     clock::Clock,
     command::CommandRunner,
-    config::{read_bounded, Config},
-    heartbeat::{bearer_header, FailureKind, RetryPolicy, Sender},
-    identity::{atomic_write, Session},
+    config::{Config, read_bounded},
+    heartbeat::{FailureKind, RetryPolicy, Sender, bearer_header},
+    identity::{Session, atomic_write},
     model::*,
     platform, scheduler,
     state::{self, Metadata, State},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use reqwest::header::HeaderValue;
 use std::{
     future::Future,
@@ -106,12 +106,19 @@ struct Engine {
 impl Engine {
     async fn start(
         config: &Config,
-        envelope: Heartbeat,
+        mut envelope: Heartbeat,
         worker: PathBuf,
         persistent: bool,
     ) -> Result<Self> {
         let clock = Arc::new(Clock::new(&envelope.agent_session_id));
         let (stop, stopping) = watch::channel(false);
+        for host in envelope
+            .resources
+            .iter_mut()
+            .filter(|r| r.resource_type == "host")
+        {
+            host.attributes.insert("diagnostics_configuration".into(),serde_json::json!({"smart_enabled":config.tools.smartctl.is_some(),"nfs_path_refresh_enabled":config.collection.nfs_path_refresh_enabled,"nfs_quotas_enabled":!config.nfs_quotas.targets.is_empty(),"configured_quota_target_count":config.nfs_quotas.targets.len()}));
+        }
         let mut state = State::new(envelope.clone(), config.limits.pending_events);
         let metadata_path = config.node.state_directory.join("inventory.json");
         if persistent {
@@ -125,6 +132,40 @@ impl Engine {
                 Err(error) if envelope.agent_generation.get()>1=>return Err(error.context("inventory metadata missing after enrollment; recover metadata or re-enroll with a new node ID")),
                 Err(_)=>atomic_write(&metadata_path,&serde_json::to_vec(&state.metadata)?)?,
             }
+        }
+        let quota_resources = config
+            .nfs_quotas
+            .targets
+            .iter()
+            .map(|target| {
+                let mut r = target.resource(&envelope.node_id);
+                r.attributes
+                    .insert("observed_boot_id".into(), envelope.boot_id.clone().into());
+                r.attributes.insert(
+                    "observed_agent_session".into(),
+                    envelope.agent_session_id.clone().into(),
+                );
+                if let Ok(identity) = crate::platform::rpc_identity() {
+                    r.attributes
+                        .insert("query_identity_uid".into(), identity.uid.to_string().into());
+                    r.attributes
+                        .insert("query_identity_gid".into(), identity.gid.to_string().into());
+                    r.attributes.insert(
+                        "query_groups_truncated".into(),
+                        identity.groups_truncated.into(),
+                    );
+                }
+                r
+            })
+            .collect::<Vec<_>>();
+        state.reconcile("nfs.quota.configuration", quota_resources, Vec::new(), true)?;
+        for target in &config.nfs_quotas.targets {
+            state.phase(
+                "nfs.rquota",
+                &target.resource_id(&envelope.node_id),
+                WorkerPhase::Idle,
+                config.nfs_quotas.interval_seconds,
+            );
         }
         let mut runners = Vec::new();
         for (class, count) in [

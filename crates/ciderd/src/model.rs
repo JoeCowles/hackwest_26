@@ -500,6 +500,7 @@ impl Resource {
                 "nfs_endpoint",
                 "nfs_export",
                 "nfs_client",
+                "nfs_user_quota",
                 "process",
                 "network_interface",
                 "storage_pool",

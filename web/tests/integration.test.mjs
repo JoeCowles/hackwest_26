@@ -8,6 +8,12 @@ import * as stage from '../js/stage.js';
 
 const envelope = data => ({ data, meta: { api_version: '1', next_cursor: null } });
 
+test('operator links identify the section and historical object without changing node selection', () => {
+  assert.deepEqual(session.parseRoute('#ops/history/abc'),{view:'ops',nodeId:null,operation:'history',objectId:'abc'});
+  assert.deepEqual(session.parseRoute('#ops/notifications'),{view:'ops',nodeId:null,operation:'notifications',objectId:null});
+  assert.equal(session.parseRoute('#ops/unrecognized').operation,'attention');
+});
+
 async function withServer(handler, run) {
   const server = createServer(handler);
   server.listen(0, '127.0.0.1');

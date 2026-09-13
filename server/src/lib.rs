@@ -1,14 +1,24 @@
 pub mod api;
+pub mod attention;
+pub mod notifications;
+pub mod history;
+pub mod diagnostics;
+pub mod quota;
 pub mod cider_api;
 // Share only the collector's pure wire model and validator, not its native workers.
 #[path = "../../crates/ciderd/src/model.rs"]
 pub mod cider_wire;
 pub mod config;
-pub mod error;
+pub mod detection;
+pub mod detection_store;
 pub mod disk_view;
+pub mod error;
 pub mod hardware;
 pub mod model;
 pub mod read_api;
+pub mod reliability;
+pub mod reliability_store;
+pub mod reliability_view;
 pub mod store;
 pub mod workers;
 

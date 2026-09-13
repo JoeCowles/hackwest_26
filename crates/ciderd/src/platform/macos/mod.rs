@@ -1,9 +1,9 @@
-use super::{SystemInfo, WorkerRequest, MAX_WORKER_OUTPUT};
-use anyhow::{ensure, Context, Result};
-use serde_json::{json, Value};
+use super::{MAX_WORKER_OUTPUT, SystemInfo, WorkerRequest};
+use anyhow::{Context, Result, ensure};
+use serde_json::{Value, json};
 use std::{
     ffi::{CStr, CString},
-    mem::{size_of, MaybeUninit},
+    mem::{MaybeUninit, size_of},
     ptr,
 };
 
@@ -290,6 +290,13 @@ fn nfs_status(fsid: [i32; 2]) -> Result<Vec<u8>> {
 
 pub fn worker(request: WorkerRequest) -> Result<Vec<u8>> {
     let bytes = match request {
+        WorkerRequest::NfsQuota {
+            target,
+            timeout_seconds,
+        } => serde_json::to_vec(&crate::quota::query(
+            &target,
+            std::time::Duration::from_secs(timeout_seconds),
+        ))?,
         WorkerRequest::Mounts => serde_json::to_vec(&mounts()?)?,
         WorkerRequest::Capacity { path, fsid } => serde_json::to_vec(&capacity(path, fsid)?)?,
         WorkerRequest::Iokit => iokit()?,

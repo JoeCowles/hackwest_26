@@ -170,6 +170,9 @@ pub fn metric_definition(name: &str) -> Option<(&'static str, &'static str)> {
             ("gauge", "count")
         }
         "device_temperature_celsius" | "device_warning_temperature_celsius" => ("gauge", "celsius"),
+        "ata_reallocated_sectors"
+        | "ata_current_pending_sectors"
+        | "ata_offline_uncorrectable_sectors" => ("gauge", "sectors"),
         "nvme_available_spare_percent"
         | "nvme_spare_threshold_percent"
         | "nvme_percentage_used" => ("gauge", "percent"),

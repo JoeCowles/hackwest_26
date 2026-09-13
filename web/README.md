@@ -75,8 +75,14 @@ identity/boot/inventory/source changes split paths. Source timestamps remain
 separate from the monotonic browser arrival axis. There is no fixture fallback
 or random metric jitter.
 
-Security events displays reported collector events only. Alert evaluation, SMS,
-access management, historical metric queries, SSE, and Prometheus remain outside
+Security displays generated storage-activity findings, source readiness/coverage,
+and collector-reported security events in three independent frozen reads. Exact
+counter evidence and baseline policy remain fixed while reviewing a page;
+observation freshness ages locally across request delays and laptop sleep. Source
+admission is separate from availability: only active, supported sources show
+“Admitted”; capacity-limited sources show “Not admitted.” The viewer has no
+administrator relearn action. See [security implementation and evidence](../docs/storage-activity-detection.md).
+General alert delivery, SMS, access management, historical metric queries, SSE, and Prometheus remain outside
 the implemented console; no navigation entry advertises those features. APFS/NFS rows are not
 additive; aggregate capacity comes from the server's deduplicated summaries.
 
@@ -105,6 +111,16 @@ clock-skew-safe structure age after budget delays, and 57-host rack paging. Java
 checks pass. These automated checks
 do not substitute for rendered views and authenticated browser interaction QA.
 The workspace review records current Rust and browser verification separately.
+
+Storage-activity verification on 2026-09-13: all 97 web tests passed after the
+admission-label fix, and a fresh workspace build embedded the final assets.
+Rendered desktop and 390×844 mobile QA passed with clearly synthetic one-page
+cases served using production assets: exact/expanded evidence, source links,
+independent source-read errors with retained evidence/recovery, local aging,
+disabled pagination controls and contained table overflow. Multi-page pagination
+and authorization are covered by automated tests, not a browser multi-page run.
+Server Spec section 20 was published through native Google Docs UI and verified
+by Saved to Drive plus DOCX comparison; no connector write/sign-off is claimed.
 
 
 For the bounded native storage smoke, build the workspace binaries first:

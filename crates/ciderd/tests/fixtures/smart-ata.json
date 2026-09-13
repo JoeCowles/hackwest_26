@@ -1,0 +1,50 @@
+{
+  "smartctl": {
+    "version": [7, 5],
+    "exit_status": 0
+  },
+  "serial_number": "PRIVATE-ATA-SERIAL",
+  "model_name": "Example ATA Device",
+  "device": {
+    "name": "/dev/disk0",
+    "protocol": "ATA"
+  },
+  "ata_smart_attributes": {
+    "revision": 16,
+    "table": [
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 100,
+        "worst": 100,
+        "thresh": 10,
+        "raw": {
+          "value": 9007199254740993,
+          "string": "9007199254740993"
+        }
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "raw": {
+          "value": 2,
+          "string": "2"
+        }
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "raw": {
+          "value": 3,
+          "string": "3"
+        }
+      }
+    ]
+  }
+}

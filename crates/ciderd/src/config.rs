@@ -1,4 +1,4 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -8,6 +8,8 @@ use std::{
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub nfs_quotas: NfsQuotas,
     pub node: NodeConfig,
     pub heartbeat: HeartbeatConfig,
     pub collection: CollectionConfig,
@@ -90,6 +92,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.nfs_quotas.validate()?;
         let h = &self.heartbeat;
         let url = reqwest::Url::parse(&h.endpoint).context("invalid heartbeat endpoint")?;
         ensure!(
@@ -200,4 +203,46 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
 
 pub fn seconds(n: u64) -> Duration {
     Duration::from_secs(n)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NfsQuotas {
+    pub targets: Vec<crate::quota::QuotaTarget>,
+    pub interval_seconds: u64,
+    pub timeout_seconds: u64,
+}
+impl Default for NfsQuotas {
+    fn default() -> Self {
+        Self {
+            targets: Vec::new(),
+            interval_seconds: 60,
+            timeout_seconds: 3,
+        }
+    }
+}
+impl NfsQuotas {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.targets.len() <= 32,
+            "at most 32 configured quota subjects"
+        );
+        ensure!(
+            (15..=3600).contains(&self.interval_seconds),
+            "quota interval must be 15..3600 seconds"
+        );
+        ensure!(
+            (1..=10).contains(&self.timeout_seconds),
+            "quota timeout must be 1..10 seconds"
+        );
+        let mut subjects = std::collections::BTreeSet::new();
+        for t in &self.targets {
+            t.validate()?;
+            ensure!(
+                subjects.insert((&t.server, &t.export_path, t.uid)),
+                "duplicate quota subject"
+            );
+        }
+        Ok(())
+    }
 }

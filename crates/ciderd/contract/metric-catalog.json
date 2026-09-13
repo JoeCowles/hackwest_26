@@ -432,6 +432,51 @@
       "notes": "smartctl JSON temperature is already Celsius."
     },
     {
+      "name": "storage.ata.reallocated_sectors",
+      "kind": "gauge",
+      "unit": "sectors",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "controller"
+      ],
+      "collector": "smartctl",
+      "source_field": "ata_smart_attributes.table[id=5,name=Reallocated_Sector_Ct].raw.value",
+      "attributes": {},
+      "optional": true,
+      "notes": "Reported ATA raw sector count. Accepted only when the exact decimal raw string agrees with the numeric value; vendor-packed encodings remain uninterpreted. This is a gauge because source behavior is not guaranteed monotonic."
+    },
+    {
+      "name": "storage.ata.current_pending_sectors",
+      "kind": "gauge",
+      "unit": "sectors",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "controller"
+      ],
+      "collector": "smartctl",
+      "source_field": "ata_smart_attributes.table[id=197,name=Current_Pending_Sector].raw.value",
+      "attributes": {},
+      "optional": true,
+      "notes": "Reported ATA raw sector count. Accepted only when the exact decimal raw string agrees with the numeric value; vendor-packed encodings remain uninterpreted. Pending counts may decrease."
+    },
+    {
+      "name": "storage.ata.offline_uncorrectable_sectors",
+      "kind": "gauge",
+      "unit": "sectors",
+      "value_type": "integer",
+      "scope": [
+        "physical_device",
+        "controller"
+      ],
+      "collector": "smartctl",
+      "source_field": "ata_smart_attributes.table[id=198,name=Offline_Uncorrectable].raw.value",
+      "attributes": {},
+      "optional": true,
+      "notes": "Reported ATA raw sector count. Accepted only when the exact decimal raw string agrees with the numeric value; vendor-packed encodings remain uninterpreted. Offline-uncorrectable counts may decrease."
+    },
+    {
       "name": "storage.nvme.critical_warning_bits",
       "kind": "gauge",
       "unit": "1",
@@ -1105,6 +1150,160 @@
       },
       "optional": false,
       "notes": "Proposed collector metric, not a macOS disk field."
+    },
+    {
+      "name": "storage.nfs.quota.status",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "string",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "getquota_rslt.status",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.active",
+      "kind": "state",
+      "unit": "1",
+      "value_type": "boolean",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_active",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.used_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_curblocks * rq_bsize",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.block_soft_limit_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_bsoftlimit * rq_bsize",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.block_hard_limit_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_bhardlimit * rq_bsize",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.used_inodes",
+      "kind": "gauge",
+      "unit": "inodes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_curfiles",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.inode_soft_limit",
+      "kind": "gauge",
+      "unit": "inodes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_fsoftlimit",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.inode_hard_limit",
+      "kind": "gauge",
+      "unit": "inodes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_fhardlimit",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.block_grace_seconds_raw",
+      "kind": "gauge",
+      "unit": "seconds",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_btimeleft",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.inode_grace_seconds_raw",
+      "kind": "gauge",
+      "unit": "seconds",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_ftimeleft",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
+    },
+    {
+      "name": "storage.nfs.quota.block_size_bytes",
+      "kind": "gauge",
+      "unit": "bytes",
+      "value_type": "integer",
+      "scope": [
+        "nfs_user_quota"
+      ],
+      "collector": "nfs.rquota",
+      "source_field": "rq_bsize",
+      "attributes": {},
+      "optional": true,
+      "notes": "Read-only configured server filesystem UID quota. Zero limits mean unlimited only in an available response; rq_active preserves enforcement state. Raw grace is unsigned wire32; interpret as signed32 relative seconds, zero has no active deadline. rquota v1 source widths may limit server precision."
     }
   ],
   "heartbeat_schema_version": "2.0"

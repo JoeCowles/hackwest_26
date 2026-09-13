@@ -2,6 +2,7 @@ import { html } from './lib.js';
 import { storageVM, diskRateMeasurement } from './storage.js';
 import { topologyStamp } from './session.js';
 import { measured, bytes, metricLabel, rateLabel, timeLabel, inventoryLabel, inventoryProperties, coverageLabel, chartPath, chartPoints, chartScale } from './model.js';
+import { ReliabilityPanel } from './reliability-views.js';
 
 const diskLink = (nodeId,id) => `#node/${encodeURIComponent(nodeId)}/disk/${encodeURIComponent(id)}`;
 const objectAnchor = id => `storage-object-${id}`;
@@ -9,7 +10,7 @@ const Panel = ({title,children}) => html`<section class="panel"><div class="pane
 const measurementNote = m => `State at snapshot: ${m?.state || 'unknown'} · ${coverageLabel(m)} · Source: ${timeLabel(m?.observed_at)}`;
 /** Dated source observations stay inspectable independently of current-rate eligibility. */
 export const RawStorageObject = ({object}) => html`<details class="storage-raw"><summary>Source details · ${object.object_id}</summary>
-  <p class="note">Object ID: ${object.object_id}<br/>Collector local ID: ${object.local_id || 'Not reported'}<br/>Raw parents: ${(object.parent_ids || []).join(', ') || 'none'}<br/>Backing: ${(object.physical_disk_ids || []).join(', ') || 'Unknown'}<br/>Topology: ${object.topology_state || 'unknown'} ${(object.topology_reason_codes || []).join(', ')}</p>
+  <p><a class="host-link" href=${`#ops/history/${encodeURIComponent(object.object_id)}`}>View metric history</a></p><p class="note">Object ID: ${object.object_id}<br/>Collector local ID: ${object.local_id || 'Not reported'}<br/>Raw parents: ${(object.parent_ids || []).join(', ') || 'none'}<br/>Backing: ${(object.physical_disk_ids || []).join(', ') || 'Unknown'}<br/>Topology: ${object.topology_state || 'unknown'} ${(object.topology_reason_codes || []).join(', ')}</p>
   <dl class="inventory-properties">${inventoryProperties(object).map(([key,value])=>html`<div key=${key}><dt>${key.replaceAll('_',' ')}</dt><dd>${value}</dd></div>`)}</dl>
   ${(object.latest_metric_series || []).length ? html`<div class="table-scroll"><table class="live-table"><thead><tr><th>Metric</th><th>Value</th><th>State at snapshot</th><th>Source / scope</th><th>Observed</th></tr></thead><tbody>${object.latest_metric_series.map((entry,i)=>html`<tr key=${entry.name+i}><td>${entry.name}</td><td title=${String(entry.measurement?.value ?? '')}>${metricLabel(entry.measurement || {})}</td><td>${entry.measurement?.state || 'unknown'}</td><td>${entry.measurement?.source || 'Not reported'} / ${entry.measurement?.scope || 'Unknown'}</td><td>${timeLabel(entry.measurement?.observed_at)}</td></tr>`)}</tbody></table></div>` : html`<p class="note">No metrics reported for this object.</p>`}
   <details><summary>Full reported object</summary><pre class="storage-json">${JSON.stringify(object,null,2)}</pre></details>
@@ -49,6 +50,7 @@ export function DiskMetricsPanel({disk,history=[],current=false,nodeId,diskId,co
     <p class="note">Physical hardware size: ${bytes(measured(disk.hardware_size_bytes))}. Capacity attribution: ${disk.capacity?.attribution || 'unresolved'}${disk.capacity?.attribution==='exclusive'?`; exclusive used ${bytes(measured(disk.capacity.used_bytes))} / total ${bytes(measured(disk.capacity.capacity_bytes))}`:''}. Shared pool capacity appears once in the shared-pool section.</p>
     ${values ? html`<div class="chart-plot"><div class="chart-y-axis note"><span>${scale.maxLabel}</span><span>0 B/s</span></div><div class="chart-body"><svg class="disk-chart" viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label=${`Disk rates, 0 to ${scale.maxLabel}; ${timeLabel(scale.start)} to ${timeLabel(scale.end)}`}><path d=${chartPath(history,'read')} fill="none" stroke="#5980a6" stroke-width="2"/><path d=${chartPath(history,'write')} fill="none" stroke="#888b90" stroke-width="2"/>${['read','write'].map(direction=>chartPoints(history,direction).map(p=>html`<circle cx=${p.x} cy=${p.y} r="2.5" fill=${direction==='read'?'#5980a6':'#888b90'}/>`))}</svg><div class="chart-x-axis note"><span>${timeLabel(scale.start)}</span><span>${timeLabel(scale.end)}</span></div></div></div>` : html`<p class="empty-note">Waiting for a new available disk-rate observation. Unknown is never plotted as zero.</p>`}
     <p class="note">Blue: read. Gray: write. SI bytes per second; browser arrival times. Up to 180 session observations; retained source samples are not counted again. Gaps show unavailable data and identity, boot or source changes.</p>
+    <${ReliabilityPanel} reliability=${disk.reliability} snapshotAgeMs=${snapshotAgeMs} current=${current}/>
     <details><summary>Disk summary and source provenance</summary><pre class="storage-json">${JSON.stringify(disk,null,2)}</pre></details>
   <//>`;
 }

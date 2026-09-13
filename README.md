@@ -3,6 +3,13 @@
 Rust macOS collector, Rust native central server, and an authenticated live web
 console for storage telemetry.
 
+Orchard helps an administrator review storage concerns and their evidence. The
+console includes live throughput and capacity, drive reliability observations,
+activity deviations, an attention queue, configurable Twilio SMS, stored metric
+history, capacity exhaustion scenarios, NFS user quotas, and diagnostic readiness.
+Missing evidence stays unknown. Orchard observes and notifies; the administrator
+decides how to respond.
+
 - `server/`: `orchard-server`, a native macOS control application with SQLite,
   TLS, enrollment, ingestion, and read APIs. It does not run node collectors.
 - `crates/ciderd/`: the macOS storage collector and its schema-2 wire contract,
@@ -20,8 +27,40 @@ The [Server Spec](https://docs.google.com/document/d/1JnsZHlYPXQ1IRsMSEHeboICzqq
 defines the receiver API. Section 15 documents v1 ingestion, section 16 the live
 read API, and section 17 the ciderd compatibility endpoint. Planned monitoring
 features are not implied to be implemented by their appearance in section 14.
+Sections 20–21 document storage activity and reliability. The new operator API
+contract is being added as section 22. Prior sections 20–21 were saved through
+native Google Docs and verified by export comparison.
 The exact collector models, catalog, and JSON schemas live in
 `crates/ciderd/contract/` and `crates/ciderd/src/model.rs`.
+
+## Storage activity detection
+
+The first rule uses existing native `iokit.block` driver byte counters. It learns
+for at least 600 observed seconds and 60 intervals, then opens a finding after
+120 sustained seconds above its versioned threshold. Missing observations remain
+unavailable; they never resolve a finding. The viewer exposes findings, readiness,
+coverage, and exact interval evidence. Administrator-only relearning is a guarded
+API action. File-access detection and automated remediation remain outside
+this implementation. Attention and optional Twilio delivery are described below.
+
+```sh
+bash scripts/cargo-local.sh test --workspace --locked
+bash scripts/cargo-local.sh run -p orchard-server --example detection_example --locked
+bash scripts/cargo-local.sh build --workspace --locked
+node scripts/smoke-detection.mjs
+```
+
+The example uses synthetic time and counters. The smoke uses disposable verified
+TLS and this Mac's real collector to check admission, learning, stale observations,
+and embedded modules. Neither is a measurement of detection efficacy.
+
+## Drive reliability
+
+Passive SMART/NVMe/ATA and IOKit evidence now feeds persistent reliability findings,
+workload-qualified service-time assessment, authenticated read APIs, and the disk
+view. SMART remains opt-in; missing evidence and replacement dates remain unknown.
+See [the reliability runbook and API contract](docs/drive-reliability.md). Shared
+Server Spec section 21 is saved and export-verified through native Google Docs.
 
 ## Run the server
 
@@ -86,35 +125,58 @@ an authoritative shared filesystem identity is supplied.
 Do not send legacy v1 inventory/telemetry and schema-2 heartbeats using the same
 node identity. Existing v1 clients keep their original endpoints and contract.
 The SQLite migration adds schema-2 receiver state and raises the schema version
-to 2; an older server refuses this newer database. Back up state before running
+to 5, including detection, reliability, attention and notification state; an older
+server refuses this newer database. Back up state before running
 a newly built server against an existing installation.
+
+## Operator workflows
+
+Open **Operations** in the dashboard:
+
+- **Attention** combines capacity pressure, node observation loss, activity and
+  reliability findings, and passive filesystem concerns. Acknowledgement records
+  review separately from source recovery. A live indicator exposes evaluation
+  freshness while evidence pages remain frozen until refreshed.
+- **Notifications** configures the sender, recipient and enablement with a
+  temporary administrator credential. Phone numbers are masked on reads.
+- **History** reads raw or rolled-up observations for one object and metric.
+  Capacity runway requires sufficient compatible, fresh growth evidence; the
+  forecast includes assumptions and a scenario range. It does not predict drive
+  failure or guarantee three days of warning.
+- **Quotas** reports configured NFS server user quotas through read-only rquota.
+  Quota usage and limits are separate from APFS volume quotas and filesystem
+  capacity. Missing, denied and stale records never imply an unlimited quota.
+- **Diagnostics** distinguishes disabled, unsupported, missing, failed and stale
+  collectors and passive NFS accessibility concerns. Filesystem integrity remains
+  unknown without supporting evidence.
+
+Create a private `.env` in the server's working directory, or set the process
+variables. `.env` and `.env.*` are ignored by Git:
+
+```dotenv
+TWILIO_ACCOUNT_SID=AC_your_account_sid
+TWILIO_SECRET=your_account_auth_token
+```
+
+An API key secret additionally needs `TWILIO_SID=SK_your_api_key_sid`; the account
+SID alone pairs with an account Auth Token. Restart the server after changing
+credentials. In **Operations → Notifications**, set E.164 sender and recipient
+numbers, choose whether to enable SMS, and save with the administrator credential.
+Sending is disabled initially. Enablement applies to future new or escalating
+concerns; suppressed history is not replayed. Provider acceptance and handset
+delivery have separate states. Ambiguous sends are marked uncertain.
+
+See the [HTTP contract](docs/operator-api.md), [attention/SMS runbook](docs/operator-attention.md),
+[history and forecast contract](docs/metric-history.md), and [quota setup and live
+verification](docs/nfs-user-quotas.md). Original project code is [MIT licensed](LICENSE);
+existing third-party code, fonts and assets retain their own notices.
 
 ## Integration status
 
-The integrated checkout passed 114 workspace tests, with three subprocess helpers
-intentionally ignored as standalone tests and exercised through their parent
-tests. The total includes 31 server tests: 17 unit tests and 14 compatibility
-tests. All 47 web tests and the separate NFS helper's 22 tests passed. Workspace
-check, the default workspace build, and the headless server build also passed.
-
-The latest isolated TLS smoke passed against the workspace server binary and
-actual ciderd process: certificate verification, CLI enrollment, private
-credentials/state, two distinct five-second heartbeats, real measurements,
-all eight read routes authenticated with a viewer credential, and embedded
-console delivery. The smoke command uses the workspace binary by default;
-`--packaged` explicitly selects the separately built application bundle.
-
-Browser checks covered desktop and 390 × 844 layouts through a temporary loopback
-proxy that verified the server's upstream TLS certificate. They used the real
-collector plus synthetic records for pagination, tiny rates, partial coverage,
-and offline states. Native-window visual QA, a freshly packaged/signed bundle,
-and deployment were not performed during this review. Live NFS export/mount
-operations and broader hardware/platform coverage remain unverified.
-
-See the [integration review](docs/integration-review.md) for the corrections,
-evidence, and remaining limits. Alert evaluation/delivery, stored historical
-reads, Prometheus/SSE, and other planned APIs remain unimplemented; the console
-exposes the implemented views and actions.
+The new operator workflows are undergoing final workspace and rendered-browser
+verification. The final evidence and remaining deployment boundaries are recorded
+in the operator API contract. Real SMS delivery has not been exercised. No
+packaged/signed application or production installation is implied by source checks.
 
 To repeat source validation on macOS:
 
@@ -132,13 +194,17 @@ node --check web/js/stage.js
 node --check web/js/views.js
 bash scripts/cargo-local.sh test --manifest-path simple-nfs-server/Cargo.toml --locked
 node scripts/smoke-ciderd.mjs
+node scripts/smoke-operators.mjs
 ```
 
-The smoke test requires Node.js and macOS OpenSSL. It uses a temporary CA,
+The ciderd smoke test requires Node.js and macOS OpenSSL. It uses a temporary CA,
 ephemeral local port, and separate state; it does not modify a running
 installation. It briefly gathers this Mac's real storage telemetry and stops
 its processes afterward. Successful runs remove temporary state; failures keep
 private diagnostic artifacts under the ignored `.codex-staging/` directory.
+The operator smoke uses a disposable loopback server with synthetic observations
+and a captured real rquota response replay. SMS remains disabled and it does not
+load the working-directory `.env`.
 
 ## Optional macOS packaging
 
