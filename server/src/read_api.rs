@@ -68,6 +68,7 @@ pub fn router(app: AppState) -> Router {
     api.with_state(state)
         .route("/", get(index))
         .route("/index.html", get(index))
+        .route("/cidar-logo.png", get(brand_logo))
         .route("/css/console.css", get(console_css))
         .route("/css/live.css", get(live_css))
         .route("/css/fonts.css", get(fonts_css))
@@ -75,6 +76,9 @@ pub fn router(app: AppState) -> Router {
 }
 
 async fn index() -> Response { asset("text/html; charset=utf-8", include_str!("../../web/index.html")) }
+async fn brand_logo() -> Response {
+    ([(axum::http::header::CONTENT_TYPE, "image/png")], include_bytes!("../../web/cidar-logo.png").as_slice()).into_response()
+}
 async fn console_css() -> Response { asset("text/css; charset=utf-8", include_str!("../../web/css/console.css")) }
 async fn live_css() -> Response { asset("text/css; charset=utf-8", include_str!("../../web/css/live.css")) }
 async fn fonts_css() -> Response { asset("text/css; charset=utf-8", include_str!("../../web/css/fonts.css")) }

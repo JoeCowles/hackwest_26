@@ -27,7 +27,7 @@ const Chart = ({ history = [] }) => {
   </div>`;
 };
 export const Sidebar = ({ view, nodeCount, go }) => html`<aside class="sidebar">
-  <div style=${{padding:'0 18px'}}><div class="brand"><span class="mark"/><span class="word">ORCHARD</span></div><div class="kicker">Live storage console</div></div>
+  <div style=${{padding:'0 18px'}}><div class="brand"><img src="/cidar-logo.png" alt="Cidar" style=${{display:'block',width:'100%',maxWidth:'220px',height:'auto',background:'#fff',borderRadius:'6px'}}/></div><div class="kicker">Live storage console</div></div>
   <nav aria-label="Console views">${NAV.map(([number,label,id]) => html`<button key=${id} class=${'nav-btn'+(view===id?' active':'')} aria-current=${view===id?'page':undefined} onClick=${()=>go(id)}><span class="n">${number}</span><span class="label">${label}</span></button>`)}</nav>
   <div class="foot note" style=${{marginTop:'auto',padding:'0 18px'}}>Heartbeat 5s<br/>${nodeCount} hosts in the latest snapshot<br/>Viewer session</div>
 </aside>`;
