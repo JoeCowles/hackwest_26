@@ -1,0 +1,39 @@
+# Copy to config.toml and edit. config.toml is git-ignored.
+
+[server]
+# Directory to export. Must be a real directory on a local volume.
+# On an APFS external drive this is typically under /Volumes.
+export_path = "/Volumes/easystore/nfs-export"
+
+# Who may mount it. Pick EXACTLY ONE of the two forms.
+#   Subnet form  - allowed_network + allowed_mask
+#   Host form    - allowed_hosts
+# Leaving both unset is a hard error: setup-server will not publish a
+# world-readable export by accident.
+allowed_network = "192.168.1.0"
+allowed_mask = "255.255.255.0"
+#allowed_hosts = ["10.0.0.11", "10.0.0.12"]
+
+# Identity mapping.
+#   "mapall"  - every client user is squashed to map_identity (simplest, least surprising)
+#   "maproot" - only remote root is remapped; other UIDs pass through
+# Omit map_mode to write no mapping option at all (UIDs pass through as-is).
+#
+# mapall defeats AUTH_SYS UID spoofing but destroys per-user attribution.
+map_mode = "mapall"
+map_identity = "nobody:nobody"
+
+# Extra export options. Common ones:
+#   "-ro"       export read-only
+#   "-alldirs"  allow clients to mount subdirectories of the export
+extra_export_opts = []
+
+[client]
+nfs_server = "192.168.1.10"
+mount_point = "/Users/Shared/nfs/cluster"
+
+# "3" is the reliable default for a macOS-served export.
+nfs_vers = "3"
+
+# resvport is required when mounting a macOS-served export.
+mount_opts = ["resvport", "rw", "hard", "intr"]

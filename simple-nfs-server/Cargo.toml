@@ -1,0 +1,25 @@
+# Standalone workspace root, deliberately not a member of the parent workspace,
+# so this crate can be added without touching the root Cargo.toml.
+[workspace]
+
+[package]
+name = "simple-nfs-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Basic macOS NFS export and mount management"
+
+[[bin]]
+name = "simple-nfs-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive", "env"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
