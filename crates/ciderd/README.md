@@ -88,7 +88,11 @@ The native boundary is in `src/platform/`; its small C shim compiles against the
 selected Apple SDK rather than duplicating Apple struct layouts. Other hosts can
 build/test pure types and parsers; live acquisition requires macOS.
 
-Collection intervals are independent, with jitter and skipped missed ticks.
+Collection intervals are independent, with configurable jitter and skipped missed ticks.
+The example schedules inventory and I/O every five seconds and all other scans
+every 15 seconds, with jitter disabled. Optional NFS quotas also default to
+15 seconds. These are scheduling intervals; slow jobs and worker contention can
+delay completed observations.
 Admission prioritizes scopes waiting longest. Command, native, and path/NFS
 worker budgets are separate; one slow mount cannot consume native IOKit slots.
 Each scope remains admitted through parsing/publication as well as child exit.

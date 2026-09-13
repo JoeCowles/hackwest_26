@@ -23,11 +23,11 @@ io_seconds = 5
 mount_inventory_seconds = 15
 nfs_counters_seconds = 15
 nfs_status_seconds = 15
-capacity_seconds = 60
-smart_seconds = 300
+capacity_seconds = 15
+smart_seconds = 15
 inventory_reconcile_seconds = 5
-apfs_accounting_seconds = 1800
-jitter_percent = 10
+apfs_accounting_seconds = 15
+jitter_percent = 0
 nfs_path_refresh_enabled = false
 active_write_probes_enabled = false
 diagnostic_jobs_enabled = false
@@ -49,7 +49,7 @@ recent_sample_history = 0
 # Optional, read-only NFS user quotas. Empty targets is unconfigured.
 # Server filesystem quotas may span multiple exports. Never sum these rows.
 [nfs_quotas]
-interval_seconds = 60
+interval_seconds = 15
 timeout_seconds = 3
 # [[nfs_quotas.targets]]
 # server = "nfs.internal.example"

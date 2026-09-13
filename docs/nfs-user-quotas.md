@@ -10,7 +10,7 @@ mutation is performed by the collector.
 
 ```toml
 [nfs_quotas]
-interval_seconds = 60
+interval_seconds = 15
 timeout_seconds = 3
 
 [[nfs_quotas.targets]]

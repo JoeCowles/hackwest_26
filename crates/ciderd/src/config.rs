@@ -216,7 +216,7 @@ impl Default for NfsQuotas {
     fn default() -> Self {
         Self {
             targets: Vec::new(),
-            interval_seconds: 60,
+            interval_seconds: 15,
             timeout_seconds: 3,
         }
     }
