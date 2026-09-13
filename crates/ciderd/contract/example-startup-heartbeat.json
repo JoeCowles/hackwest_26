@@ -1,0 +1,244 @@
+{
+  "schema_version": "2.0",
+  "node_id": "node-example-01",
+  "boot_id": "boot-example-01",
+  "agent_session_id": "session-example-01",
+  "sequence": "480",
+  "created_at": "2026-09-12T19:00:00Z",
+  "resources": [
+    {
+      "resource_id": "node-example-01/host",
+      "resource_type": "host",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "os_family": "macOS",
+        "os_build": "fixture-only",
+        "architecture": "arm64"
+      }
+    },
+    {
+      "resource_id": "node-example-01/controller-a",
+      "resource_type": "controller",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "model": "SYNTHETIC NVMe Controller",
+        "identity_source": "synthetic fixture"
+      }
+    },
+    {
+      "resource_id": "node-example-01/device-a",
+      "resource_type": "physical_device",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "bsd_name": "disk0",
+        "transport": "NVMe",
+        "serial_redacted": true
+      }
+    },
+    {
+      "resource_id": "node-example-01/store-a",
+      "resource_type": "media",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "bsd_name": "disk0s2"
+      }
+    },
+    {
+      "resource_id": "node-example-01/container-a",
+      "resource_type": "apfs_container",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "uuid": "SYNTHETIC-CONTAINER-A"
+      }
+    },
+    {
+      "resource_id": "node-example-01/volume-a",
+      "resource_type": "filesystem",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "filesystem_type": "apfs",
+        "role": "Data",
+        "uuid": "SYNTHETIC-VOLUME-A"
+      }
+    },
+    {
+      "resource_id": "node-example-01/mount-local-a",
+      "resource_type": "mount",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "filesystem_type": "apfs",
+        "mount_path": "/System/Volumes/Data",
+        "fsid": "fixture:local",
+        "mount_generation": "1"
+      }
+    },
+    {
+      "resource_id": "node-example-01/nfs-client",
+      "resource_type": "nfs_client",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "implementation": "native macOS; synthetic fixture"
+      }
+    },
+    {
+      "resource_id": "node-example-01/endpoint-a",
+      "resource_type": "nfs_endpoint",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "configured_hostname": "storage.example.test",
+        "effective_addresses": [
+          "192.0.2.10"
+        ]
+      }
+    },
+    {
+      "resource_id": "node-example-01/export-a",
+      "resource_type": "nfs_export",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "configured_export": "/research",
+        "backend_identity": "not_reconciled"
+      }
+    },
+    {
+      "resource_id": "node-example-01/mount-nfs-a",
+      "resource_type": "mount",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "identity_confidence": "host_local",
+      "attributes": {
+        "filesystem_type": "nfs",
+        "mount_path": "/Volumes/research",
+        "fsid": "fixture:nfs",
+        "mount_generation": "1",
+        "effective_version": "3",
+        "requested_options": {},
+        "effective_options": {
+          "hard": true
+        }
+      },
+      "capabilities": {
+        "nfs.nstatus": {
+          "support": "supported",
+          "checked_at": "2026-09-12T19:00:00Z",
+          "reason": "Synthetic capability fixture; not a runtime test."
+        },
+        "nfs.pnfs": {
+          "support": "unsupported",
+          "checked_at": "2026-09-12T19:00:00Z",
+          "reason": "Native-client baseline policy; verify deployed implementation."
+        }
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_id": "node-example-01/relation-1",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/device-a",
+      "to_resource_id": "node-example-01/controller-a",
+      "relation": "attached_to"
+    },
+    {
+      "relationship_id": "node-example-01/relation-2",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/store-a",
+      "to_resource_id": "node-example-01/device-a",
+      "relation": "backed_by"
+    },
+    {
+      "relationship_id": "node-example-01/relation-3",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/container-a",
+      "to_resource_id": "node-example-01/store-a",
+      "relation": "backed_by"
+    },
+    {
+      "relationship_id": "node-example-01/relation-4",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/container-a",
+      "to_resource_id": "node-example-01/volume-a",
+      "relation": "contains"
+    },
+    {
+      "relationship_id": "node-example-01/relation-5",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/mount-local-a",
+      "to_resource_id": "node-example-01/volume-a",
+      "relation": "mounts"
+    },
+    {
+      "relationship_id": "node-example-01/relation-6",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/mount-nfs-a",
+      "to_resource_id": "node-example-01/export-a",
+      "relation": "accesses"
+    },
+    {
+      "relationship_id": "node-example-01/relation-7",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/mount-nfs-a",
+      "to_resource_id": "node-example-01/endpoint-a",
+      "relation": "accesses"
+    },
+    {
+      "relationship_id": "node-example-01/relation-8",
+      "revision": "1",
+      "observed_at": "2026-09-12T19:00:00Z",
+      "from_resource_id": "node-example-01/mount-nfs-a",
+      "to_resource_id": "node-example-01/nfs-client",
+      "relation": "observed_by"
+    }
+  ],
+  "collections": [],
+  "events": [],
+  "tombstones": [],
+  "message_type": "heartbeat",
+  "agent_generation": "7",
+  "clock_id": "session-example-01/monotonic",
+  "monotonic_ns": "3600050000000",
+  "agent": {
+    "version": "0.1.0-design",
+    "target": "aarch64-apple-darwin",
+    "os_version": "fixture-only",
+    "os_build": "fixture-only",
+    "delivery_mode": "latest",
+    "heartbeat_interval_seconds": 15,
+    "quarantined_workers": 0,
+    "discarded_samples_total": "0",
+    "dropped_events_total": "0",
+    "payload_limited": false
+  },
+  "inventory": {
+    "revision": "12",
+    "included": true
+  },
+  "collector_states": []
+}

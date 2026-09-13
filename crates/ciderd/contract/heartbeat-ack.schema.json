@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent_session_id",
+    "accepted_sequence",
+    "inventory_revision",
+    "request_inventory",
+    "server_received_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "agent_session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "accepted_sequence": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "maxLength": 39
+    },
+    "inventory_revision": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 39
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "request_inventory": {
+      "type": "boolean"
+    },
+    "server_received_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:macos-storage:heartbeat-ack:2.0",
+  "title": "Storage heartbeat acknowledgement v2.0"
+}

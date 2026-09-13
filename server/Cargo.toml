@@ -10,6 +10,7 @@ default = ["desktop"]
 desktop = ["dep:eframe"]
 
 [dependencies]
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 anyhow = "1"
 axum = "0.8.9"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
@@ -19,7 +20,7 @@ dirs = "6"
 eframe = { version = "0.33.3", optional = true, default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 serde_path_to_error = "0.1"
 sha2 = "0.10"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }

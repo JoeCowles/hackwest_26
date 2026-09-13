@@ -60,6 +60,7 @@ pub async fn maintain(state: &AppState, now: i64) -> ApiResult<()> {
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM inventory_generations WHERE generation NOT IN (SELECT generation FROM inventory_generations recent WHERE recent.node_id=inventory_generations.node_id ORDER BY generation DESC LIMIT 64)").execute(&mut *tx).await?;
+    crate::cider_api::retain(&mut tx, now).await?;
     tx.commit().await?;
     Ok(())
 }

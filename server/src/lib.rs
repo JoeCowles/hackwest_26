@@ -1,4 +1,8 @@
 pub mod api;
+pub mod cider_api;
+// Share only the collector's pure wire model and validator, not its native workers.
+#[path = "../../crates/ciderd/src/model.rs"]
+pub mod cider_wire;
 pub mod config;
 pub mod error;
 pub mod model;

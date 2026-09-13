@@ -1,0 +1,29 @@
+{
+  "smartctl": {
+    "version": [
+      7,
+      5
+    ],
+    "exit_status": 8
+  },
+  "device": {
+    "name": "/dev/disk0",
+    "type": "nvme",
+    "protocol": "NVMe"
+  },
+  "smart_status": {
+    "passed": false
+  },
+  "temperature": {
+    "current": -2
+  },
+  "nvme_smart_health_information_log": {
+    "nsid": -1,
+    "critical_warning": 1,
+    "percentage_used": 135,
+    "data_units_read": 340282366920938463463374607431768211455,
+    "data_units_written_s": "18446744073709551617",
+    "power_on_hours": 500,
+    "media_errors": 3
+  }
+}

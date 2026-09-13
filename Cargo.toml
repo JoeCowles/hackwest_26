@@ -1,6 +1,11 @@
 [workspace]
-members = ["server"]
+members = ["server", "crates/ciderd"]
 resolver = "3"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+rust-version = "1.97"
 
 [profile.release]
 lto = "thin"

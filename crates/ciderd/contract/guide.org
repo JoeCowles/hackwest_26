@@ -1,0 +1,910 @@
+#+title: Rust macOS Storage Telemetry Daemon
+#+options: toc:3 num:t ^:nil
+#+property: header-args :eval never :exports code
+#+language: en
+
+* Implementation decision
+
+Implement one Rust executable, =ciderd=, managed by =launchd=. It collects macOS storage observations on independent schedules and sends the latest known state to the head node's authenticated HTTPS heartbeat endpoint. The server stores inventory and time series and renders the dashboard. The daemon does not host a dashboard, expose a scrape endpoint, or require Telegraf, a Go service, Python, or a separate long-running collector service.
+
+Use native Rust bindings for frequent macOS queries and Rust-supervised command adapters where the existing tools already encapsulate useful platform behavior. A Rust daemon does not require replacing =smartctl=, =diskutil=, or =nfsstat= with handwritten protocol implementations. Root is assumed. Ordinary framework calls and libc wrappers remain allowed; syscall-number dispatch, inline assembly, kernel extensions, and manually encoded storage commands are outside the implementation.
+
+The key invariant is: *a heartbeat never waits for a disk query.* It serializes an already-published snapshot. A hung collector changes coverage and freshness; it must not stop the daemon from reporting that it is alive.
+
+** Changes from the preceding guide
+
+The implementation language and transport are now fixed: Rust plus HTTP heartbeats. The tool catalogue and metric semantics are retained. The transport changes from mandatory durable telemetry batches to *latest-state heartbeats by default*. Historical replay is an optional extension, not a prerequisite for the first version. One executable may launch itself in a restricted =worker= mode for failure isolation; this is not a second application to deploy.
+
+Every transmitted heartbeat gets its own sequence number. Each underlying collection keeps its original ID and timestamps when repeated. Receipt of a new heartbeat means that the daemon contacted the server; it does not mean that SMART, capacity, or NFS statistics were just refreshed.
+
+** Starting schedules
+
+These are proposed settings, not measured optimal values or vendor requirements. Collection and transport intervals are independent.
+
+| Activity | Initial interval | Rust implementation | Heartbeat content |
+|----------+------------------+---------------------+-------------------|
+| Heartbeat POST | 15 seconds | Tokio task plus reused reqwest Client | Latest published inventory, observations, collector state |
+| Local block I/O | 5 seconds | IOKit binding on bounded native worker | Cumulative bytes/operations/errors/retries/time |
+| Cached mount inventory | 15 seconds | libc getfsstat/getmntinfo with MNT_NOWAIT | Mount identities, flags, cached accounting |
+| NFS client counters | 15 seconds | Supervised nfsstat command, JSON adapter | Host-client totals, not per-mount totals |
+| NFS mount status | 15 seconds | SDK-backed sysctl wrapper in worker mode | Mount flags, outstanding entries, oldest request age |
+| Fresh capacity | 60 seconds | Isolated statfs/getattrlist/Foundation query | Total/free/available and supported volume accounting |
+| SMART | 300 seconds | Supervised smartctl JSON command | Physical condition and lifetime counters |
+| Local topology | Startup/change; 300-second reconciliation | diskutil plist adapter plus Disk Arbitration events | Devices, containers, volumes, backing relationships |
+| APFS accounting/snapshots | 30 minutes, configurable | Supervised diskutil/apfs.util adapters | Snapshot and purgeability/accounting metadata |
+| Traces/checkers/captures | Explicit job only | Bounded command workers | Findings or artifact references, not routine raw output |
+
+The underlying sources and their scope are documented in the catalogue.[fn:blockheader][fn:mountheader][fn:nfsstatman][fn:smartman][fn:diskutil]
+
+With five-second I/O sampling and fifteen-second latest-only heartbeats, the head node normally receives one selected I/O sample per heartbeat, not every five-second sample. Its counter rates therefore cover the actual interval between delivered sample timestamps. Preserve a bounded recent-sample ring only when five-second history is required; do not promise that resolution merely because collection runs faster than transmission.
+
+*Validation boundary.* This is a revised implementation specification, not a completed daemon. The storage catalogue is retained from the September 12, 2026 source review; the Rust library and launchd references were checked for this revision. The JSON fixtures are synthetic. No macOS acquisition, launchd installation, or Rust compilation is claimed. The accompanying validation checks the proposed data contract and configuration files, not platform behavior.
+
+* Rust daemon architecture
+
+** Components and ownership
+
+#+begin_example
+launchd
+  └─ ciderd run
+       ├─ collector scheduler
+       │    ├─ macOS native worker(s)
+       │    ├─ fixed command adapters
+       │    └─ ciderd worker <allowed-operation>
+       ├─ state owner: inventory + latest per-field observations
+       ├─ immutable snapshot publisher
+       └─ heartbeat task ── HTTPS POST /heartbeat ── head node
+#+end_example
+
+Use a bounded =tokio::sync::mpsc= channel for worker results and a single state owner for merging them. Publish an immutable =Arc<PublishedState>= using =tokio::sync::watch=. A heartbeat task clones the current =Arc=, releases the watch borrow immediately, builds the request from memory, and performs HTTP without holding state locks. A watch channel retains the newest value, which fits latest-state publication.[fn:rustwatch]
+
+The state owner performs no disk access or network calls. It validates worker output, rejects stale resource generations, applies inventory changes, and publishes. Keep the expensive serialization/parsing of unusually large payloads off the async runtime workers or use strict byte/record limits. Logging must also have a bounded nonblocking path; synchronously logging to a failing disk can defeat the separation.
+
+A suggested source tree is:
+
+#+begin_example
+src/
+  main.rs                 # run / worker / validate-config modes
+  config.rs               # startup validation; installed tool paths
+  identity.rs             # node ID, session ID, persisted agent generation
+  model.rs                # domain values, units, collector outcomes
+  state.rs                # only owner of mutable observation state
+  scheduler.rs            # per-scope schedules and bounded work admission
+  heartbeat.rs            # snapshots, POST, acknowledgement, backoff
+  command.rs              # retained Child ownership, capped output, reaping
+  collectors/
+    inventory.rs          # diskutil, hdiutil, profiler adapters
+    mounts.rs             # cached mount records; isolated fresh capacity
+    iokit.rs              # normalized device counters
+    smart.rs              # smartctl parser and bitmask interpretation
+    nfs.rs                # nfsstat plus native NSTATUS normalization
+    apfs.rs               # snapshots and optional accounting
+    diagnostics.rs        # allowlisted, opt-in jobs
+  platform/macos/
+    mod.rs                # cfg(target_os = "macos") boundary
+    ffi.rs                # small audited unsafe surface
+    disk_arbitration.rs   # lifecycle notifications; dedicated run loop
+    nstatus.rs            # SDK-verified layout and bounds
+#+end_example
+
+This is a layout proposal, not a generated codebase. Keep acquisition separate from pure parsing so captured plist/JSON fixtures can be tested without a Mac.
+
+** Rust dependencies and platform boundaries
+
+| Area | Preferred starting point | Implementation constraint |
+|------+--------------------------+---------------------------|
+| Runtime, scheduling, process I/O | tokio | Bounded channels/pools; missed ticks skip rather than burst |
+| HTTP | reqwest | Reuse one Client; explicit connection/total deadlines and TLS policy |
+| Typed wire encoding | serde and serde_json | No floating-point intermediate for counters |
+| Plist decoding | plist | Decode XML/binary plist structurally; do not regex XML |
+| Decimal-string numeric fields | Validated newtypes; optionally serde_with::DisplayFromStr | Canonical strings plus checked numeric range |
+| IOKit | objc2-io-kit and objc2-core-foundation | Feature/availability checks; release IOKit handles separately from CF objects |
+| Disk Arbitration | objc2-disk-arbitration | Dedicated run loop/queue, owned callback context, debounce notifications |
+| Foundation volume resources | objc2-foundation | Optional enrichment; filesystem access still needs isolation |
+| POSIX/Darwin functions | libc | getfsstat/getmntinfo/statfs and ordinary sysctl/ioctl wrappers |
+| Missing SDK declarations | Build-time allowlisted bindgen output | Correct Apple SDK/target; do not hand-copy unverified structures |
+| Local configuration | A typed TOML parser | Reject unknown/misspelled security and limit settings |
+| Tracing | Structured bounded logging | No credentials or arbitrary filenames as routine metric labels |
+
+The Rust framework crates expose bindings rather than inventing a new telemetry source. The =libc= Darwin module contains platform function and type declarations; the =plist= crate supplies structural decoding. Pin tested crate versions and commit =Cargo.lock= instead of treating =latest= documentation as a deployment specification.[fn:rustiokit][fn:rustcf][fn:rustda][fn:rustfoundation][fn:rustlibc][fn:rustplist][fn:rustbindgen]
+
+For frequently sampled IOKit properties, wrap each acquired =io_object_t= in a small RAII type that performs the appropriate =IOObjectRelease=. Use the framework binding's ownership types for retained Core Foundation values. Copy primitive values into owned Rust types before sending a result across threads. Never extend a borrowed framework object's lifetime merely to satisfy =Send=.
+
+Keep all =unsafe= inside the macOS adapter boundary with documented preconditions. For =getmntinfo=, serialize calls and copy the library-owned records before another call can replace them; alternatively use caller-owned =getfsstat= storage. Preserve bounded C-string bytes losslessly where practical and derive a separate display string. Do not use =canonicalize=, =Path::exists=, or filesystem metadata to normalize a remote mount locator.[fn:getmntinfo][fn:getfsstat][fn:rustlibc]
+
+For =VFS_CTL_NSTATUS= and less common disk =ioctl= structs, generate or verify declarations against the supported SDK. Validate alignment, returned length, flexible-array count and all multiplication/addition before reading. A generated binding does not prove runtime support. Compile and test both =aarch64-apple-darwin= and =x86_64-apple-darwin= when both are in the fleet.
+
+** Collector interface
+
+A collector returns *one result per collection scope*, containing many metrics. It does not send HTTP. A scheduling key includes the collector ID, resource ID, and attachment/mount generation. The scheduler admits at most one outstanding operation for that key, including workers that have timed out but remain alive.
+
+The following types illustrate the internal boundary, not a complete compilable implementation:
+
+#+begin_src rust
+// Domain-facing types; native handles and command output stay in adapters.
+struct CollectionRequest {
+    collector: CollectorId,
+    resource: ResourceId,
+    generation: ResourceGeneration,
+    run_id: CollectionId,
+    controller_deadline: std::time::Instant,
+}
+
+struct CollectorSlot {
+    phase: WorkerPhase,
+    last_attempt: Option<std::sync::Arc<CollectionResult>>,
+    // Keep the most recent available observation independently per metric.
+    latest_by_metric: std::collections::BTreeMap<MetricKey, ObservationRef>,
+}
+
+enum WorkerPhase {
+    Idle,
+    Running,
+    TimedOutPendingExit,
+    Disabled,
+}
+#+end_src
+
+A partially successful result replaces only the fields it actually measured. A failed attempt updates =last_attempt= without erasing older usable measurements. Retain references to the immutable collection results backing those values. This avoids losing a supported health field merely because one later SMART subquery failed.
+
+Raw results are untrusted input even from local tools. Cap output size before parsing; reject duplicate JSON keys where ambiguity would affect identity/counters; validate allowed fields, types, units and ranges; retain a short redacted error. Parsing failure must not panic the daemon. Collector panics become collector failures, not successful empty snapshots.
+
+* What the head node must be able to represent
+
+** Resource identity and relationships
+
+Model the following separately. All identifiers below are *design recommendations*, not names supplied automatically by macOS.
+
+| Resource | Identity policy | Important relationships |
+|----------+-----------------+-------------------------|
+| Host | Enrollment-generated persistent node ID; regenerate on image cloning | Owns collector sessions and observed resources |
+| Controller / physical device | Strong device identifiers when available; otherwise a host-local assigned ID with confidence | Contains media/namespaces; attached through a bus/provider |
+| Media / partition / virtual device | Reported UUID or host-local inventory identity | Backed by device, RAID set, or disk image |
+| APFS container | Container UUID, namespaced to the observing host unless explicitly reconciled | Imports physical stores; contains volumes |
+| Filesystem volume | Volume UUID when supported; otherwise explicit weaker identity | Lives in container or on media |
+| Snapshot | Parent-volume ID plus snapshot UUID | Snapshot of a volume; possibly mounted |
+| Mount instance | Host + boot + fsid + collector-assigned mount generation | Mounts a volume/snapshot or accesses an NFS export |
+| NFS endpoint/export | Configured source, effective addresses, export path; optional administrator-issued canonical backend ID | Observed through one or more mounts/clients |
+| Host NFS client | Host + client implementation | Owns aggregate client counters |
+| Process | Host + boot + PID + process start identity | Optional workload attribution |
+
+BSD names such as =disk0= and mount paths are *locators*, not durable identities. APFS container identifiers must be treated as opaque; derive relationships from inventory rather than manipulating their strings. Space sharing means multiple APFS volumes can draw on the same capacity budget.[fn:diskutil][fn:apfsfoundation]
+
+Keep persistent resource identity separate from *counter epoch*. A disk can retain its identity while its driver is recreated. A mount can reuse the same path after remounting. Increment the epoch when continuity is lost, and start a new rate baseline.
+
+Do not automatically merge devices with missing/duplicated serial numbers, UUID-cloned volumes, or NFS exports merely because DNS names resolve to one address. Record identity confidence and unresolved relationships. A shared NFS export observed by twenty clients is not twenty independent capacity pools.
+
+** Four kinds of records
+
+| Record | Contents | Head-node treatment |
+|--------+----------+---------------------|
+| Inventory | Resource attributes, relationships, capability support, lifecycle | Versioned upserts; explicit tombstones |
+| Measurement | Typed counter, gauge, or state with source and scope | Time series with availability/freshness |
+| Evidence event | Error, recovery transition, verification finding, diagnostic artifact reference | Searchable, deduplicated incident history |
+| Collection result | Success/partial/timeout, duration, errors, parser version | Collector-health and coverage monitoring |
+
+Examples: “SMART command completed” is a collection result; “drive reports degraded reliability” is a storage condition. “No new NFS data” is not equivalent to “NFS is idle.” “Mounted” is not equivalent to “responsive.”
+
+Keep capability (=supported / unsupported / unknown=), attempt outcome, and observed health independent. A previously supported device that becomes unreachable is a failed query, not newly unsupported hardware. Never remove a disk merely because an inventory query failed.
+
+* Core collector catalogue: Rust adapters
+
+** diskutil: local topology, APFS state, and snapshot inventory
+
+#+begin_src sh
+# Illustrative locators; discover the actual devices first.
+/usr/sbin/diskutil list -plist
+/usr/sbin/diskutil info -plist disk0
+/usr/sbin/diskutil apfs list -plist
+/usr/sbin/diskutil apfs listVolumeGroups -plist
+/usr/sbin/diskutil apfs listSnapshots -plist disk3s1
+#+end_src
+
+*Data:* device/volume identifiers, UUIDs, sizes, filesystem/partition type, mount state, read-only/media properties, connection information, APFS stores/containers/volumes/roles, volume groups, encryption/lock information, and snapshot identifiers/transaction information where returned. Some commands and keys are version-dependent.[fn:diskutil]
+
+*Implementation:* parse property lists using a real plist decoder. Keep a versioned adapter and a bounded raw fixture. Use the native property names from captured target-host output; do not create a supposedly stable Apple key path from a human-readable label. Query inventory once per cycle, not once per metric. Represent bytes as integers and booleans as booleans.
+
+*Output:* inventory upserts plus capacity/configuration observations. Snapshot names and crypto identities belong in access-controlled inventory, not time-series labels. Prefer changes plus occasional full reconciliation over resending all metadata each five seconds.
+
+*Rust adapter:* =tokio::process::Command= with explicit argument arrays; =plist::Value= or typed deserialization for output. Acquire one inventory snapshot, then normalize its objects. Native calls and CLI fallbacks must emit the same domain types. Keep the HTTP schema independent of Apple's plist keys.[fn:rustplist][fn:rustchild]
+
+** Disk Arbitration: local inventory notifications and IOKit linkage
+
+Use =DADiskCopyDescription=, =DADiskCopyWholeDisk=, and =DADiskCopyIOMedia=, with appeared/disappeared/description-changed callbacks. These supply local disk descriptions and the route to registry objects. They are not the complete NFS mount inventory.[fn:dadisk][fn:daguide]
+
+*Implementation:* callbacks should enqueue an inventory refresh, not perform slow queries inside the callback. Debounce event bursts, then reconcile with the mount/device catalogue. Treat disappearance as an observation of an attachment ending; retain historical resource identity.
+
+=diskutil activity= is useful interactively, but its manual explicitly says not to parse its output. Use Disk Arbitration callbacks for automation.[fn:diskutil]
+
+*Rust adapter:* =objc2-disk-arbitration= on a dedicated CFRunLoop thread or a correctly configured dispatch queue. Callbacks enqueue a bounded refresh notification only; never query SMART, await HTTP, or unwind a Rust panic through a C callback. Retain callback context until callbacks are unregistered and quiescent.[fn:rustda]
+
+** IOKit / ioreg: block-device throughput, operations, errors, retries, timing
+
+#+begin_src sh
+/usr/sbin/ioreg -a -r -c IOMedia
+/usr/sbin/ioreg -a -r -c IOBlockStorageDriver
+#+end_src
+
+The production path is =IOServiceGetMatchingServices= plus registry-property reads and relationship traversal. The CLI is useful for initial capture and fixtures. Associate each =Statistics= dictionary with its own registry entry and actual media; do not recursively sum every dictionary encountered.
+
+The read-side mapping below has an equivalent write side. All six source families are cumulative since the driver instance was created.[fn:blockheader]
+
+| IORegistry field | Proposed normalized metric | Type / unit |
+|------------------+----------------------------+-------------|
+| Bytes (Read) | storage.device.read_bytes_total | Counter / bytes |
+| Operations (Read) | storage.device.read_operations_total | Counter / operations |
+| Errors (Read) | storage.device.read_errors_total | Counter / errors |
+| Retries (Read) | storage.device.read_retries_total | Counter / retries |
+| Total Time (Read) | storage.device.read_accounted_time_nanoseconds_total | Counter / nanoseconds |
+| Latency Time (Read) | Retain as optional raw field; do not enable derived queue latency by default | Conditional semantics |
+
+The generic driver passes zero into the latency accumulator. Total time is a driver-accounted interval, not complete application latency; summing overlapping request times does not yield reliable utilization.[fn:blocksource]
+
+*Implementation:* preserve integer precision and field presence. Record registry identity, driver class, sample bounds, and a counter epoch. Release IOKit/Core Foundation objects correctly. An unavailable field is not zero. Prefer one authoritative counter source; use =iostat= as a cross-check rather than a second additive measurement.
+
+*What can be derived:* byte/s and operations/s, average transfer size, and average accounted time per operation. *What cannot:* latency percentiles, live queue occupancy, or APFS-volume attribution from these counters alone.
+
+*Rust adapter:* =objc2-io-kit= plus Core Foundation bindings, isolated from the async executor. Read the =Statistics= dictionary once per sampled driver, then derive all fields. An =ioreg= plist adapter is a useful first implementation or fixture source, not an additional additive metric source.[fn:rustiokit][fn:rustcf]
+
+** getmntinfo / getfsstat: pathname-free mounted-filesystem inventory
+
+Use =getmntinfo(..., MNT_NOWAIT)= or =getfsstat(..., MNT_NOWAIT)= to collect cached mount records. Copy results promptly; =getmntinfo= uses library-managed storage. Filter by filesystem type in memory, without =realpath=, opening the mount directory, or testing path existence.[fn:getmntinfo][fn:getfsstat]
+
+*Data:* filesystem type, source, mount path, fsid, flags, and cached capacity/file-count fields. Export inventory immediately; mark capacity as cached, with its true refresh age unknown unless independently known.
+
+*Rust implementation:* use =libc= declarations where present and verified SDK-generated bindings where absent; isolate the unsafe conversion in =platform::macos=. A restricted worker mode of the same executable is preferable to untested, handwritten ABI layouts. Allow mount-list races and disappearing mounts. Retain raw source strings for IPv6, aliases, and unusual export syntax rather than parsing =server:path= with an unconditional split at the first colon.
+
+** statfs / getattrlist / Foundation: capacity and filesystem capabilities
+
+| Source | Data to retain | Proposed field families |
+|--------+----------------+-------------------------|
+| statfs / fstatfs | Block size, total/free/available blocks, file counts, flags, preferred I/O size | storage.filesystem.*_bytes; reported file counts |
+| getattrlist / fgetattrlist | UUID, used space, reserve/quota and capability/attribute masks where supported | Filesystem identity, capability map, supported accounting |
+| Foundation URLResourceValues | Volume traits and capacity/allocation resources | Enrichment with explicit API provenance |
+| Important/opportunistic capacity resources | Allocation-priority-dependent available-space estimates | Separate estimate gauges, not free-byte replacements |
+
+These interfaces expose different accounting views and support masks; not every filesystem supplies every attribute.[fn:mountheader][fn:attrheader][fn:foundation][fn:capacity]
+
+For =statfs=, compute =total_bytes = f_blocks × f_bsize=, =free_bytes = f_bfree × f_bsize=, and =available_bytes = f_bavail × f_bsize=. Preserve all three. A derived =(f_blocks − f_bfree) × f_bsize= is *block-accounted usage*, not automatically APFS uniquely allocated space. Check arithmetic and raw-field validity before computing.
+
+*Implementation:* refreshing these values on NFS may require remote work. Run refreshes in bounded workers, separate from cached enumeration. Do not pretend a repeatedly retrieved cache has been freshly validated. File counts require filesystem-specific interpretation; do not apply a generic “inode exhaustion” alarm to every provider.
+
+*df is a fallback for operators, not the resilient polling primitive.* Even current =df -n= can perform pathname operations while producing output; filters/positional operands add further complications. A text or libxo JSON parser does not change that execution behavior.[fn:dfsource][fn:dfman]
+
+*Rust adapter:* use =libc::statfs= and verified =getattrlist= declarations, or the Foundation binding for supported resource values. Any path-based refresh runs in the isolated worker lane. Multiply block counts with checked wide-integer arithmetic; failures remain unavailable fields, not wrapped values.
+
+** smartctl: physical media health and lifetime counters
+
+#+begin_src sh
+smartctl --version
+smartctl --scan-open
+smartctl -x -j /dev/disk0
+# On a version supporting lossless auxiliary integer representations:
+smartctl -x -jv /dev/disk0
+#+end_src
+
+Use discovery initially; do not scan every poll. Select the discovered *physical device*, not an APFS container. Probe actual access through its bridge/controller. =-x= asks for the broad supported report, including health and logs; unsupported portions do not justify discarding the rest.[fn:smartman][fn:smartdarwin]
+
+| Report family | Data useful to the dashboard | Handling |
+|---------------+------------------------------+----------|
+| Identity/capabilities | Model, serial, firmware, size, protocol and supported features | Inventory; protect identifiers |
+| Generic health | Reported SMART pass/fail where supplied | State, not a complete health verdict |
+| NVMe current condition | Critical-warning bits, temperatures, spare/threshold, endurance percentage used | Gauges and condition bits |
+| NVMe lifetime activity | Data units read/written, host commands, busy minutes, power cycles/hours | Cumulative counters; retain exact units |
+| NVMe fault history | Unsafe shutdowns, media/data-integrity errors, error-log counts, thermal history | Counters plus evidence; a historical count is not necessarily a current fault |
+| ATA/vendor SMART | Attribute ID, normalized/worst/threshold values, flags, raw numeric/string values | Preserve complete attribute tuples; interpret via a versioned vendor map |
+| Logs/self-tests | Existing test outcomes, errors and reported age | Historical evidence, not proof of recent verification |
+
+NVMe JSON uses the =nvme_smart_health_information_log= family. Its temperature output is already Celsius; do not subtract Kelvin again. The reported =nsid= distinguishes namespace-specific scope from the controller-wide broadcast view. Data-unit counts use 512,000-byte units; label the multiplication as reported/quantized host bytes, not exact NAND traffic. Preserve wide integers and do not cap endurance estimates at 100.[fn:nvmeprint]
+
+*Exit handling:* =smartctl= returns a bitmask. Bits 0–2 concern command/access/command-check problems; bits 3–7 carry current or historical health/threshold/log findings. Parse valid JSON even when exit status is nonzero, and preserve both the raw status and decoded reasons. Bit 2 can mean a partially successful request. Do not use a generic “nonzero means no measurements” wrapper.[fn:smartman]
+
+The Darwin backend's IOKit access and command support are hardware-dependent. Root cannot make unsupported USB/RAID pass-through work, and reading health does not guarantee that self-test initiation is available. Queries can wake media. Make wake policy explicit; a skipped sleeping disk is not a failed disk.[fn:smartdarwin][fn:smartman]
+
+*Rust adapter:* supervise the configured =smartctl= executable, decode JSON with =serde_json= and preserve =ExitStatus::code()= separately. Prefer the tool's exact string/auxiliary representation or a checked =u128= parse for wide NVMe values. Do not use =as_f64()= then cast back. Missing access is not a reason to reimplement raw SMART passthrough in Rust.[fn:rustnumber][fn:smartdarwin]
+
+** nfsstat: aggregate NFS client counters and separate mount state
+
+#+begin_src sh
+/usr/bin/nfsstat -f JSON -c
+/usr/bin/nfsstat -f JSON -m
+/usr/bin/nfsstat -f JSON -v -m
+/usr/bin/nfsstat -f JSON -E -c
+# Feature-probed text/version-specific fallbacks:
+/usr/bin/nfsstat -c -3
+/usr/bin/nfsstat -c -4
+#+end_src
+
+*Data:* client operations, RPC retries/timeouts/reply anomalies, cache hit/miss and paging counters, v4 operations/compounds/callbacks, and error categories. Per-mount output separately describes source, protocol/options, selected locations/addresses and status. JSON and error-mode availability depend on the installed utility.[fn:nfsstatman]
+
+*Mapping:* export operation counters with bounded =family= and =operation= attributes. Keep v3 procedures, v4 RPCs, v4 inner operations, and callbacks distinct; summing them would double-count incompatible accounting units. Cache counters retain the cache kind. Error counters retain the reported error category.
+
+*Scope:* aggregate client counters belong to a *host NFS-client resource*, never copied to each mount. Mount data belongs to its mount instance. Detailed output distinguishes original request options from effective settings. Do not invent client per-mount bytes, IOPS, or latency when the source only supplies totals/configuration.
+
+Use all-mount enumeration then filter in memory: a path argument is canonicalized with =realpath=. Use discrete JSON snapshots and your own deltas, not an assumption that interval mode is streaming JSON. Never use =-z= in a collector. Keep output fixtures and OS/parser versions because the JSON shape is not your public wire contract.[fn:nfsstatcode]
+
+*Rust adapter:* a pure versioned =nfsstat= parser behind the shared command runner. Probe JSON support once per source-version change. Pass no mount pathname for the all-mount query. Normalize its counters to the host NFS-client resource and options/status to mount resources; retain partial parse coverage explicitly.
+
+** Native NFS status helper: outstanding requests and oldest wait
+
+The =vfs.generic.ctlbyfsid= route supports structured queries through normal =sysctl= wrappers. Apple source implements =VFS_CTL_QUERY= and =VFS_CTL_NSTATUS= for NFS. Use the target SDK's =vfsidctl= and =netfs_status= layouts; this is an optional compatibility-tested adapter, not a universal guarantee for every client/build.[fn:vfssource][fn:mountheader]
+
+| Source | Proposed normalized observation | Interpretation |
+|--------+---------------------------------+----------------|
+| ns_status / VQ_NOTRESP | storage.nfs.mount.not_responding | Kernel-reported unresponsive state |
+| ns_status / VQ_DEAD | storage.nfs.mount.dead | Kernel-reported dead state |
+| ns_threadcount | storage.nfs.mount.outstanding_request_entries | Request entries, not unique blocked threads |
+| ns_waittime | storage.nfs.mount.oldest_request_age_seconds | Oldest outstanding request age, integer seconds |
+| ns_threadids[] | Optional evidence payload | Repeated IDs possible; zero denotes asynchronous I/O |
+| ns_mountopts | Inventory/configuration | Significant option string |
+
+The kernel source explicitly counts requests, permits repeated thread IDs, and saturates the wait value at =UINT32_MAX=. QUERY/NSTATUS flag handling is not identical. Neither clear flags nor zero outstanding requests constitute a fresh RPC liveness check.[fn:nfskernel]
+
+*Helper algorithm:* resolve the named MIB; append the selector; initialize the SDK structure and all reserved bytes; supply the mount fsid; query the required output size; enforce a configured allocation cap; fetch and validate the returned length/count; retry a size race at most twice. Return unsupported/disappeared/permission/error distinctly. Never infer usable fields from a header constant alone. Thread lists stay out of metric labels.
+
+NSTATUS walks the shared request list in the published implementation. Benchmark overhead before using tight intervals on request-heavy hosts or hosts with many mounts.[fn:nfskernel]
+
+*Rust adapter:* =ciderd worker nfs-status= accepts a validated fsid plus generation through bounded IPC, not an arbitrary shell command. =libc::sysctlnametomib= / =libc::sysctl= call the platform wrappers; SDK-derived declarations describe the request and result structures. The parent rejects a reply whose mount generation no longer matches.[fn:rustlibc][fn:rustbindgen]
+
+** Native NFS versus pNFS
+
+Apple's current mount documentation allows v4 minor versions 0 and 1. The NFS Manager maintainer currently reports no native pNFS or NFSv4.2 support. Therefore the baseline should not advertise native pNFS layout/data-server metrics. Record the actual client/version and probe support instead of inferring features from “NFSv4.”[fn:mountnfs][fn:nfssupport]
+
+A third-party client or guest VM implementing pNFS requires a provider adapter for its layouts, data servers and transport statistics. Keep that adapter's resources distinct from native macOS mounts. Client-side NFS observations do not reveal remote disks' SMART, RAID redundancy, or scrub state; obtain those from a server agent or authorized storage-management API.
+
+* Supplementary tool catalogue
+
+These tools remain useful, but most should *not* become independent high-frequency collectors. “Read-only” describes intended mutation behavior, not guaranteed low cost or nonblocking execution.
+
+** Local inventory, APFS accounting, and provider state
+
+| Tool/interface | Data it can supply | Acquisition / parser | Recommended role and caveat |
+|----------------+--------------------+----------------------+-------------------------------|
+| system_profiler | Controller/device model, firmware, attachment and bus information as reported | -json; discover -listDataTypes | Startup/hardware change; slow/partial output possible |
+| diskutil appleRAID list | Set/member relationships and reported RAID state | Native output, versioned parser | Conditional provider collector; do not equate logical health with every member's health |
+| diskutil coreStorage list -plist | Legacy logical/physical volume graph and encryption-related state | Plist | Only when CoreStorage exists |
+| hdiutil info -plist | Attached images, backing paths, virtual devices | Plist | Classify virtual storage; backing path may itself be remote |
+| fdesetup status | FileVault configuration/progress information reported by the tool | Text adapter | Configuration/recovery posture, not physical media health |
+| lsvfs; diskutil listFilesystems -plist | Registered filesystem types / diskutil formatting personalities | Text / plist | Capability inventory; neither lists health of mounted volumes |
+| diskutil apfs listCryptoUsers -plist | Unlock identity/type metadata | Plist where supported | Optional restricted inventory; normally omit personal UUIDs |
+| diskutil apfs defragment ... status | Defragmentation configuration | Text | Setting only; not a fragmentation percentage |
+
+Sources for this group are the respective Apple manuals.[fn:systemprofiler][fn:diskutil][fn:hdiutil][fn:fdesetup][fn:lsvfs]
+
+For =system_profiler=, select only present types, such as =SPStorageDataType=, =SPNVMeDataType=, =SPSerialATADataType=, =SPUSBDataType= and =SPThunderboltDataType=. Preserve unsupported/partial collection instead of treating an empty report as evidence that hardware disappeared.[fn:systemprofiler]
+
+| APFS / file-accounting tool | Data | Recommended treatment |
+|----------------------------+------+-----------------------|
+| apfs.util -G <volume-path> | Purgeable-file accounting | Optional slow accounting; separate from immediately free space |
+| apfs.util -S <directory> | Maintained directory statistics, where present | Query configured roots only; do not automatically enable accounting |
+| apfs.util -Z <file> | Purgeability flags | Incident/configuration evidence |
+| apfs.util -A get <volume>; -D get <device> | Atime / defragmentation settings | Inventory only |
+| apfs.util -k <device>; -y <file>; -Y <directory> | UUID / sync-root information | Optional inventory or troubleshooting |
+| tmutil listlocalsnapshots; listlocalsnapshotdates | Time Machine's local snapshot set | Backup-related inventory; narrower than all APFS snapshots |
+| fs_snapshot_list | Native snapshot enumeration | Optional replacement for snapshot CLI, not an extra additive source |
+| Disk Utility → Show APFS Snapshots | GUI-only columns including private/cumulative sizes, tidemark, kind | Operator evidence; no UI scraping in the agent |
+| stat/fstat, getattrlistbulk, Foundation allocation resources | Logical size, reported allocation, object metadata | Targeted file accounting; recursive enumeration may be expensive |
+| du | Directory-tree allocation attribution | Explicit bounded job; avoid default recursive scans |
+| quota | Supported user/group quota information | Identity-specific check; unavailable is not unlimited |
+
+=apfs.util= is located in the APFS filesystem bundle's =Contents/Resources= directory. Its option case matters: =-s= changes UUIDs and =-M= enables accounting, so use an explicit read-operation allowlist. Shared extents/snapshots make a sum of file allocation or snapshot sizes an unreliable deletion-reclaim estimate.[fn:apfsutil][fn:tmutil][fn:snapshot][fn:snapshotgui][fn:apfsfoundation][fn:quota]
+
+** Native disk query extensions
+
+Use normal =ioctl()= with the public portion of the installed =sys/disk.h=. These are optional native queries; they do not require handcrafted device-protocol commands.[fn:diskheader]
+
+| Query family | Data | Output class |
+|--------------+------+--------------|
+| DKIOCGETBLOCKSIZE, DKIOCGETBLOCKCOUNT, DKIOCGETPHYSICALBLOCKSIZE | Logical/physical geometry | Inventory |
+| DKIOCISFORMATTED, DKIOCISWRITABLE | Media formatting/writeability state | State |
+| DKIOCGETLOCATION, DKIOCGETFIRMWAREPATH | Attachment classification/path | Inventory |
+| DKIOCGETMAX*READ/WRITE | Transfer and scatter/gather constraints | Capabilities |
+| DKIOCGETMINSEGMENTALIGNMENTBYTECOUNT; DKIOCGETMAXSEGMENTADDRESSABLEBITCOUNT | DMA constraints | Capabilities |
+| DKIOCGETFEATURES | Advertised storage feature bits | Capabilities |
+| DKIOCGETCOMMANDPOOLSIZE | Command-pool capacity | Inventory; not live queue depth |
+| DKIOCGETPROVISIONSTATUS | Supported provisioning extents | Bounded enrichment, not frequent whole-device scanning |
+| DKIOCGETERRORDESCRIPTION | Supported driver error description | Evidence |
+
+Probe selectors independently and retain unsupported results. Exclude all set, format, eject, unmap and other action selectors from the collector helper's interface.
+
+** Performance and process attribution
+
+| Tool/API | Data | Example / acquisition | Limits and recommended use |
+|----------+------+-----------------------+----------------------------|
+| iostat | Transfer size, transfers/s, bandwidth | iostat -d -w 1 -c 10 disk0 | Validation/fallback; first report is since boot, not the first interval |
+| powermetrics | Available disk/task I/O and power/thermal context | Discover --help, then available samplers | Optional windows; machine thermal pressure is not SSD temperature |
+| proc_pid_rusage | Per-process disk-I/O byte counters | Supported RUSAGE_INFO structure | Process scope; not automatically per mount |
+| proc_pidinfo / proc_pidfdinfo / proc_listpidspath | Process/open-file/path associations | Native helper | libproc is marked private; compatibility-test |
+| fs_usage | Filesystem/disk operations, timings, errors, process/path context | fs_usage -w -f filesys -t 10; -f diskio | Short trace windows; not assumed lossless accounting |
+| lsof | Open-file users, busy volumes, deleted-but-open files | Targeted invocation | Diagnosis; can itself encounter blocking |
+| xctrace / Instruments | Installed filesystem/disk/system trace instruments and attribution | List templates/instruments, time-limit record, export | Developer-tool dependency; optional incident artifact |
+| DTrace-based tools | Supported trace probes/events | Installed scripts/probes | SIP limits protected targets even with root |
+| Endpoint Security | Entitled filesystem/security events | Entitled framework client | Not root-only and not a general I/O-byte/latency stream |
+| vm_stat | Paging/VM pressure context | Text snapshots with page-size-aware parsing | Host context, not per-disk attribution |
+
+The corresponding documentation and headers define these surfaces. In particular, =libproc.h= explicitly warns that its interfaces are private and subject to change.[fn:iostat][fn:powermetrics][fn:resource][fn:libproc][fn:fsusage][fn:lsof][fn:xctrace][fn:sip][fn:es][fn:vmstat]
+
+Do not infer disk utilization from =iostat= fields or make Linux =iostat -x= assumptions. Trace timings and requested byte counts have event-specific meaning; unsuccessful requests are not completed byte transfers. Store trace interpretation/version alongside derived metrics.
+
+** NFS network, credentials, probes, and local-server metrics
+
+| Tool/API | Data | Acquisition | Interpretation / scheduling |
+|----------+------+-------------+-----------------------------|
+| rpcinfo | RPC registration and NULL-call reachability | -p server; -t server nfs 3/4; -n 2049 -t server nfs 4 | Bounded active probe, not authenticated file-operation health |
+| showmount | Legacy MOUNT-protocol export/client information | showmount -e server | Not required for a healthy v4-only service; not complete live-client accounting |
+| netstat | Interface bytes/errors/drops, TCP counters, socket state | -ib; -s -p tcp; -anv -p tcp | Host/interface/connection context, not automatically per mount |
+| nettop | Flow-level traffic information exposed by the tool | nettop -m tcp; discover logging options | Optional bounded flow diagnosis; kernel NFS attribution is not ordinary app attribution |
+| tcpdump | Captured traffic on the observed client/server path | Bounded capture/ring files | Sensitive artifacts; record capture loss and filters |
+| tshark / Wireshark | Decoded RPC/NFS operations, results, request/reply timing | RPC SRT reports or packet-field export | Passive wire latency, not application latency; encryption/loss limits coverage |
+| libnfs | Separate high-level userspace NFS operations | Async stat/read probe with explicit timeout/retry policy | Tests a new client/session, not the existing kernel mount |
+| ncctl / nclist | Per-mount credential/principal selection | Installed list/query mode | Audit-session-sensitive; root does not aggregate all user identities |
+| nfs4mapid | Identity-mapping diagnostics | Installed query mode | Troubleshooting only; version-dependent |
+| nfsstat -s | This Mac's NFS server counters | JSON where supported | Enable only if this host serves NFS |
+| nfsstat -e | Requests/bytes for locally exported directories | JSON where supported | Server-side export scope, not remote NAS telemetry |
+| nfsstat -u | Local server client/user activity | Supported structured output | Sensitive identities; bounded dimensions |
+
+These are separate probes and accounting surfaces, not alternative ways to obtain remote-drive health.[fn:rpcinfo][fn:showmount][fn:netstat][fn:nettop][fn:tcpdump][fn:tshark][fn:libnfs][fn:ncctl][fn:nfs4mapid][fn:nfsstatman]
+
+For wire analysis, a v4 COMPOUND may contain multiple operations; do not give every inner operation an independent copy of its RPC duration. Mapping file handles/flows to mounts may require stateful correlation. Port 2049 does not cover every auxiliary v3 service. Report observation coverage and capture loss with any packet-derived rate or percentile.[fn:nfsdissector][fn:mountnfs]
+
+** Events, integrity checks, and provider-specific tools
+
+| Tool/API | Data or finding | Collection policy |
+|----------+-----------------+-------------------|
+| log show / log stream | Kernel/daemon storage failures, timeouts, detach/recovery messages | Bounded JSON stream/window; retain source/message/version and cursor |
+| Disk Arbitration notifications | Local media/volume lifecycle | Baseline event trigger plus reconciliation |
+| FSEvents | Filesystem change notifications | Optional; not every read or byte, not a remote distributed change log |
+| kqueue filesystem/vnode filters | Supported change/status notifications | Native event trigger; not complete quantitative telemetry |
+| diskutil verifyVolume | Filesystem consistency findings | Explicit maintenance job; potentially disruptive |
+| diskutil verifyDisk | Partition-map-related findings | Explicit job; not a surface scan |
+| fsck_apfs | APFS consistency/space/warning summaries | Explicit no-repair or suitable live/unmounted job |
+| fsck_hfs / fsck_exfat / fsck_msdos | Filesystem-specific consistency findings | Follow each tool's mounting/no-repair requirements |
+| sysdiagnose | Broad system incident bundle | Operator-triggered, bounded storage and retention |
+| zpool status / zpool iostat | Installed OpenZFS pool/vdev state, errors, scrub/resilver and I/O | Conditional provider adapter; check macOS-port options |
+| Vendor RAID / NAS / filesystem-extension tools | Hidden members, backend redundancy, provider state | Implement against that provider's supported management interface |
+| Dedicated filesystem read/write probe | Success/error and operation-specific duration | Opt-in test target/identity; writes require separate authorization |
+
+Sources document the event/checker/provider boundaries.[fn:log][fn:daguide][fn:fsevents][fn:vfssource][fn:fsckapfs][fn:diskutil][fn:fsckhfs][fn:fsckexfat][fn:fsckmsdos][fn:sysdiagnose][fn:zpoolstatus][fn:zpooliostat]
+
+For =fsck_apfs=, =-n= disables repairs, =-q= is a quick check, and =-l= live verification can still disrupt responsiveness. Warnings do not necessarily make the default exit status fail; =-W= changes that interpretation. Checker cache statistics are not live APFS cache statistics.[fn:fsckapfs]
+
+Treat “last consistency check passed” as a dated finding with tool/options/scope. Never silently auto-repair, unmount, scrub, benchmark, or start drive self-tests as a consequence of the dashboard polling. A synthetic read may be served from cache; a successful write test is specific to its credentials and sync policy.
+
+** Existing wrappers and agents: useful code, not additional sensors
+
+These are comparison sources only, not dependencies of the Rust daemon. A library or agent can reduce implementation work without increasing what macOS exposes. For example, =gopsutil='s Darwin disk implementation retrieves the IOKit byte/operation/time counters, converts time to milliseconds, and defines =IoTime= as read time plus write time. That sum must not become Linux-style device utilization.[fn:gopsutil]
+
+Telegraf's =diskio= input is a reference for comparison, not a required runtime or alternate sender. Audit the selected version's Darwin backend and emitted fields; do not accept unsupported cross-platform fields merely because a shared schema has space for them. Retain custom adapters for SMART, APFS topology, NFS status and collector isolation where needed.[fn:telegrafdiskio]
+
+* Scheduling, blocking isolation, and launchd
+
+** Tokio is coordination, not cancellation of kernel I/O
+
+Use async tasks for timers, channels, pipes, and the heartbeat connection. Native synchronous calls must not execute directly on a Tokio runtime worker. A small dedicated native thread pool is acceptable for measured bounded calls, while potentially indefinite filesystem calls belong in worker processes.
+
+In particular, =timeout(spawn_blocking(statfs_on_nfs))= is not a hard deadline on the filesystem operation. Tokio documents that a running =spawn_blocking= task cannot be aborted, and that runtime shutdown can wait for it indefinitely. Wrapping an operation in a future does not make its underlying kernel work cancellable.[fn:rustblocking][fn:rusttimeout]
+
+Assign every collector a work class and an admission limit. These are controller budgets, not promises of kernel cancellation:
+
+| Work class | Initial deadline | Outstanding-work rule |
+|------------+------------------+-----------------------|
+| Native cached/local sampling | 2 seconds | Two host-wide worker slots; keep slot if still running |
+| diskutil / nfsstat | 10 seconds | Four command slots; one run per collector scope |
+| SMART / detailed APFS | 30 seconds | Shared command budget; one per device |
+| Fresh remote-path query | 3 seconds | Four separate remote slots; one per mount |
+| system_profiler | 60 seconds | One inventory job |
+| Incident job | Explicit job deadline | One host-wide, bounded artifact size |
+
+An occupied slot is skipped or backed off, not queued without limit. The heartbeat task, its network connection, and state publication use none of the remote worker slots. On wake or a scheduling pause, skip missed polling ticks rather than launching a burst of catch-up queries; Tokio's =MissedTickBehavior::Skip= provides this timer behavior.[fn:rustmissed]
+
+** Command runner requirements
+
+Use =tokio::process::Command= with an absolute executable, argument array, fixed working directory, minimal environment and closed/null stdin unless a specific IPC request is being sent. Do not invoke a shell. Built-in paths are fixed; optional paths are installer-verified and root-controlled, including writable parent directories. Never search an inherited user PATH from a root daemon.
+
+Retain the =Child= handle in the supervisor. Drain stdout and stderr concurrently with separate byte caps and an overall deadline. Do not use an unbounded =output()= collection for commands whose output scales with disks, mounts, processes or log history. If a cap is exceeded, mark the result truncated, request termination and continue draining/discarding or close the pipes according to policy; do not stop reading and then wait forever for a child blocked on a full pipe.
+
+At the deadline, publish one immutable timeout result and set the live worker phase to =timed_out_pending_exit=. Call =start_kill()= when appropriate; a separate reaper keeps ownership and eventually calls =wait()= or =try_wait()=. Tokio's =start_kill= requests termination without waiting; =kill().await= also waits for exit. Neither belongs as an unbounded await in the heartbeat path. Dropping a =Child= does not kill it by default.[fn:rustchild]
+
+Keep the semaphore permit until confirmed exit. =kill_on_drop(true)= is only a defensive measure, not a replacement for explicit lifecycle ownership. Check launchd/process-group behavior for descendants of diagnostic tools. A surviving worker must not be forgotten when the supervisor restarts: retain a small active-job record and conservatively reserve uncertain slots until a reaper proves the old process is gone. Verify executable identity and process start identity before interacting with any recorded PID; PID numbers alone are unsafe identities.
+
+A late response becomes dated evidence, not a second mutable version of the timeout result. It cannot overwrite a replacement mount or newer sample. Do not repeatedly restart the daemon to clear stuck workers; that can accumulate orphaned work.
+
+** Local backing storage and NFS hazards
+
+Keep executable, working directory, config, credentials and state off remote mounts. Disable remote path capacity refresh by default until the worker-isolation tests pass; cached mount/status queries still provide useful coverage. An active read/write test requires explicit target and credential policy. Never switch a production mount to soft to make monitoring convenient.[fn:mountnfs]
+
+The optional =vfs.generic.noremotehang= per-process flag can be requested in a dedicated probe worker using a normal =sysctlbyname= wrapper. It is a feature-probed SPI optimization, not a universal deadline; it affects behavior relative to an ordinary application and must be recorded with the probe.[fn:vfssource][fn:nfssocket]
+
+No daemon can guarantee progress during total kernel failure or loss of its own executable/backing disk. Keep a bounded in-memory degraded mode after startup. The head node must detect absent heartbeats without falsely attributing that absence to a particular disk.
+
+** launchd deployment
+
+Run =ciderd run= in the foreground under a system LaunchDaemon. Do not double-fork, call =daemon()=, or use a Rust daemonization crate: launchd owns process lifetime. Handle SIGTERM with a bounded shutdown, stop admitting new work, and make a best-effort final heartbeat without waiting indefinitely for collectors.[fn:launchd]
+
+The bundle includes =org.example.ciderd.plist= and =examples/ciderd.toml=. Installation should create root-owned non-user-writable executable/config/state paths, install the plist under =/Library/LaunchDaemons=, and validate its actual paths. The sample's =org.example= label and endpoint are placeholders for deployment configuration, not values discovered from the fleet. Protect secrets with owner-only permissions; keep them out of command arguments and logs. Arrange rotation/limits for the sample stdout/stderr log destinations.
+
+Running the initial daemon as root satisfies the stated deployment assumption. Keep the acquisition API narrow so privilege separation can be added later, but do not require a second service for the first implementation. Root does not remove SIP, privacy, entitlements, or missing device passthrough.[fn:sip][fn:es][fn:smartdarwin]
+
+Persist an enrollment-generated node ID, identity confidence/state, and an increasing =agent_generation=. Under single-instance ownership, increment and durably store the generation before the first heartbeat of each daemon invocation. Generate a fresh =agent_session_id= and reset the in-memory heartbeat sequence. If identity/generation state is missing after enrollment, require re-enrollment or explicit recovery rather than silently reusing an earlier generation. Clone images before enrollment, not afterward.
+
+Store inventory/identity metadata through a separate bounded persistence worker, never a synchronous write in the heartbeat task. Report persistence failures; do not make every HTTP send depend on a new fsync.
+
+Use session-relative monotonic time for sampling and rate intervals; UTC is for display/correlation. Do not serialize =Instant= itself. Define a =clock_id= and numeric duration from a documented origin. On sleep/wake or suspected clock discontinuity, start a new clock segment and invalidate current-rate baselines; do not assume portable =Instant= semantics across suspension. Keep older observations dated under their original clock rather than restamping them.
+
+* Heartbeat contract and state handling
+
+** Endpoint behavior
+
+The endpoint path in the examples is illustrative; adapt it to the existing server route. The required behavior is:
+
+#+begin_example
+POST /heartbeat
+Authorization: Bearer <per-node credential>
+Content-Type: application/json
+
+Request:  heartbeat.schema.json, schema_version "2.0"
+Success:  HTTP 200 plus heartbeat-ack.schema.json
+#+end_example
+
+Use authenticated HTTPS with certificate validation. Bind the authenticated principal to =node_id= server-side rather than trusting the JSON field. A per-node bearer credential is the proposed default; deployment-managed mTLS is an alternative. The response is an acknowledgement, not a channel for arbitrary root commands.
+
+Construct one reusable async =reqwest::Client=. Configure connection and total deadlines, disable redirects, and apply an explicit proxy/CA policy appropriate to the deployment. The current async client does not supply a total request timeout by default; set it deliberately. Keep response bodies bounded too.[fn:rusthttp]
+
+An illustrative client-builder fragment is:
+
+#+begin_src rust
+use std::time::Duration;
+
+let client = reqwest::Client::builder()
+    .https_only(true)
+    .redirect(reqwest::redirect::Policy::none())
+    .connect_timeout(Duration::from_secs(3))
+    .timeout(Duration::from_secs(8))
+    // Where supported by the selected reqwest release:
+    .retry(reqwest::retry::never())
+    .build()?;
+#+end_src
+
+The daemon owns retry/backoff rather than allowing hidden retries to undermine one-attempt budgets. =retry::never()= is available in the checked reqwest API; pin and compile the selected version. This fragment omits deployment-specific CA, proxy and authentication setup and is not a complete sender.[fn:rustretry]
+
+** What a heartbeat contains
+
+The outer envelope contains identity, a new heartbeat sequence/time, daemon state, cached inventory revision, collector phases, and immutable collection records. Existing metric names and their source semantics remain unchanged. The fixture includes a deliberately large counter to test precision, not a plausible observation of the example machine.
+
+#+begin_src json
+{
+  "schema_version": "2.0",
+  "node_id": "node-example-01",
+  "boot_id": "boot-example-01",
+  "agent_session_id": "session-example-01",
+  "sequence": "481",
+  "created_at": "2026-09-12T19:00:00Z",
+  "resources": [],
+  "relationships": [],
+  "collections": [
+    {
+      "collection_id": "session-example-01:481:iokit.block:device-a",
+      "resource_id": "node-example-01/device-a",
+      "collector": "iokit.block",
+      "adapter_version": "1.0.0",
+      "source_version": "fixture-only",
+      "started_at": "2026-09-12T18:59:59.980Z",
+      "finished_at": "2026-09-12T19:00:00Z",
+      "clock_id": "session-example-01/monotonic",
+      "started_monotonic_ns": "3600000000000",
+      "finished_monotonic_ns": "3600020000000",
+      "status": "ok",
+      "metrics": [
+        {
+          "name": "storage.device.read_bytes_total",
+          "kind": "counter",
+          "unit": "bytes",
+          "availability": "available",
+          "attributes": {},
+          "value_type": "integer",
+          "value": "12345678901234567890",
+          "freshness": "live",
+          "counter_epoch": "boot-example-01/registry-example-42/1"
+        }
+      ]
+    }
+  ],
+  "events": [],
+  "tombstones": [],
+  "message_type": "heartbeat",
+  "agent_generation": "7",
+  "clock_id": "session-example-01/monotonic",
+  "monotonic_ns": "3600050000000",
+  "agent": {
+    "version": "0.1.0-design",
+    "target": "aarch64-apple-darwin",
+    "os_version": "fixture-only",
+    "os_build": "fixture-only",
+    "delivery_mode": "latest",
+    "heartbeat_interval_seconds": 15,
+    "quarantined_workers": 0,
+    "discarded_samples_total": "0",
+    "dropped_events_total": "0",
+    "payload_limited": false
+  },
+  "inventory": {
+    "revision": "12",
+    "included": false
+  },
+  "collector_states": [
+    {
+      "collector": "iokit.block",
+      "resource_id": "node-example-01/device-a",
+      "phase": "idle",
+      "poll_interval_seconds": 15,
+      "stale_after_seconds": 45,
+      "last_attempt_id": "session-example-01:481:iokit.block:device-a"
+    }
+  ]
+}
+#+end_src
+
+The full =example-heartbeat.json= includes APFS/device topology, SMART state, cached mount data, NFS status and host-client counters. =example-degraded-heartbeat.json= combines failures with retained usable readings. =example-repeated-heartbeat.json= deliberately repeats exactly the same observations under a newer heartbeat sequence.
+
+| Field | Meaning |
+|-------+---------|
+| node_id | Persistent enrollment identity, bound to request authentication |
+| agent_generation | Persisted increasing daemon-invocation number; fences delayed older sessions |
+| agent_session_id | Fresh random identifier for this invocation |
+| boot_id | Host boot identity; not interchangeable with daemon session |
+| sequence | Increasing number assigned to this outbound heartbeat |
+| created_at / monotonic_ns / clock_id | When this heartbeat snapshot was prepared |
+| agent | Build/platform context, intended heartbeat period, dropped-data counts, worker health |
+| inventory.revision / included | Version of cached graph and whether graph records accompany this heartbeat |
+| resources / relationships / tombstones | Last-known inventory upserts and explicit verified removals |
+| collector_states | Latest attempt reference, live worker phase, configured sampling/staleness policy |
+| collections | Immutable latest attempts and the results backing latest usable observations |
+| events | Bounded pending evidence with stable event IDs |
+
+** Repeating data without fabricating new samples
+
+The state store keeps the last attempt for each =(collector, resource, generation)= and the last available observation for each metric key. Emit the union of immutable collection results needed to describe that state, deduplicated by =collection_id=. Partial results update only measured fields. Timeout/unsupported results have no fabricated numeric values. A last available value can coexist with a newer failed attempt.
+
+A fifteen-second heartbeat may repeat a five-minute SMART sample twenty times. All twenty copies retain the same =collection_id=, =started_at=, =finished_at=, monotonic bounds and metric values. The head node records that sample once and updates daemon liveness separately. It must not plot repeated cached values as twenty independent measurements or infer zero I/O from repeated counter totals.
+
+=collector_states.last_attempt_id= refers to a result carried in the same payload. The current =phase= can change while the referenced completed result stays immutable. For example, the last attempt was a timeout, but a later heartbeat may report that the worker has finally exited and its phase is now idle.
+
+A result's =freshness= describes the observation at acquisition. Staleness at dashboard time is computed from its original timestamp/clock and the collector's stale threshold; do not mutate the old result simply because another heartbeat was sent. =cached= with an unknown kernel refresh age remains cached/unknown even immediately after a successful query.
+
+** Integers, time, and missing values
+
+Use checked integer types in Rust: =u64= for bounded sequence values, =u128= for wide device counters and byte arithmetic, and an appropriate signed type for signed gauges. Serialize integer measurements as canonical decimal strings to avoid downstream binary64 loss. For unknown-width external fields, validate an exact string representation and supported range instead of converting through =f64=. The catalog determines units and signedness.
+
+A typed field can use =serde_with::DisplayFromStr= or a small custom serializer; add strict range and canonical-format validation on input. =serde_json::Number= offers exact integer accessors and optional arbitrary-precision handling, but blindly calling =as_f64= discards that advantage.[fn:rustdisplay][fn:rustnumber]
+
+The following is a focused serialization illustration, not the whole contract:
+
+#+begin_src rust
+use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, DisplayFromStr};
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CounterReading {
+    #[serde_as(as = "DisplayFromStr")]
+    value: u128,
+    counter_epoch: String,
+}
+// Apply a canonical decimal syntax check before accepting external input.
+// Collection time, unit, source and availability live in the enclosing model.
+#+end_src
+
+Keep capability support, attempt outcome, storage condition, and present-day age separate. A healthy HTTP connection cannot upgrade an old failed disk observation. No value is represented by an unavailable state and an absent =value= field, never =0= or an invented success flag. The inherited 71-entry metric catalog remains the allowlist for baseline storage measurements.
+
+** Inventory acknowledgement
+
+Assign a monotonically increasing inventory revision within each agent generation. Include the cached graph on startup, whenever it changes, periodically for reconciliation, and until the head node acknowledges that revision. Once acknowledged, =inventory.included=false= allows empty resource/relationship/tombstone arrays. Never rerun =diskutil= merely to serialize the same graph.
+
+Inventory records are upserts. Even an included graph is *not* permission to delete unseen resources. Only explicit tombstones derived from a successful authoritative enumeration or verified disappearance remove a resource/relationship. Failed inventory collection leaves prior objects present but dated. This rule also prevents payload limits or partial enumeration from looking like mass disk loss.
+
+The acknowledgement carries the accepted heartbeat sequence, the stored inventory revision and =request_inventory=. If the server lacks the advertised revision, it asks for inventory on the next heartbeat through this fixed Boolean. Do not mark that revision acknowledged until the response matches the current session and sequence and explicitly confirms it. A different revision is not interchangeable.
+
+** HTTP outcome and deduplication policy
+
+| Outcome | Daemon action |
+|---------+---------------|
+| HTTP 200 and valid matching acknowledgement | Mark that attempt accepted; acknowledge only events/tombstones actually included; update acknowledged inventory revision |
+| Network error / deadline / 5xx | Retain latest state; back off with jitter; next attempt uses a fresh snapshot and sequence |
+| 429 | Honor a valid Retry-After within local policy; collect independently; send current state after the pause |
+| 401 / 403 | Surface enrollment/credential failure; back off; never disable TLS or substitute credentials |
+| 400 / 422 | Treat as a contract/configuration fault; preserve bounded evidence and stop rapid identical retries |
+| 413 | Emit a bounded summary heartbeat with payload-limit evidence; reduce optional content or correct limits; do not silently drop mandatory identity |
+| Invalid/mismatched acknowledgement | Acceptance remains unknown; do not retire pending evidence or inventory |
+
+These are proposed endpoint semantics. HTTP errors must not terminate the daemon or suppress local collection. Use one in-flight heartbeat, an eight-second request deadline and a fifteen-second normal interval initially. Backoff may stretch delivery; the server then reports telemetry interruption. On recovery, send the newest snapshot, not minutes of obsolete heartbeat envelopes.
+
+For the head node, deduplicate envelope identity by =(node_id, agent_generation, agent_session_id, sequence)= and reject differing content reused under the same key. Deduplicate observations by =(node_id, collection_id)= and events by =(node_id, event_id)=, preserving original observation times. Sequence gaps are permitted and reported; they are not zero-valued samples.
+
+Fence older =agent_generation= values from updating live node state. The server must not return to an older session simply because a delayed request arrives last. A node credential alone does not authorize arbitrary other node IDs. Store =received_at= independently of the client's clocks. A replayed identical envelope does not refresh live last-seen indefinitely; only a newly accepted current-generation heartbeat advances the live heartbeat sequence.
+
+After accepting an authorized current-generation heartbeat, update *daemon liveness* even when its collectors report failures. Use original observation age for *metric freshness* and source-specific evidence for *storage condition*. These are three separate dashboard states.
+
+** Latest-state delivery and optional history
+
+Baseline delivery has *no durable queue of every heartbeat*. Keep a bounded latest-state cache and a bounded pending event buffer. Persist the small inventory/identity state and unacknowledged tombstones; this is not a queue of telemetry envelopes. Retain events until acknowledgement of an envelope that actually contained them; on capacity loss increment =dropped_events_total=. Persist the last-known inventory graph, its identity mapping and pending tombstones together as one atomic metadata snapshot. Retain deletion intent until acknowledged so a crash cannot leave a removed disk permanently present on the server. Do not silently evict unacknowledged tombstones when a buffer is full; report the metadata limit and reconcile deliberately. On process restart, generate a new session, restore that graph as dated prior knowledge, send inventory and re-collect; without optional persistence, prior unsent events and gauge history can be lost. The session transition exposes that continuity boundary.
+
+Increment =discarded_samples_total= when a result is superseded before being included in any accepted heartbeat. This is expected coalescing in latest-only mode, not necessarily an agent fault. It must not count the same superseded result twice. This self-telemetry counter resets with the agent session/generation.
+
+The complete prepared body and cached pending evidence have byte limits as well as item limits. Start at 1 MiB uncompressed requests, 16 KiB acknowledgements and 256 pending events. If mandatory data exceeds the request budget, send a summary with =agent.payload_limited=true=, empty observation arrays as necessary, expose coverage loss, and leave inventory unacknowledged. This summary must still fit the same heartbeat schema; collector references may be omitted rather than left dangling. Chunked inventory needs an explicit future protocol extension; do not invent truncation semantics in the parser.
+
+Add a bounded sample ring or persistent outbox only if preserving high-resolution history during head-node outages becomes a requirement. Such history is not a fresh heartbeat and must not extend liveness. Deliver it through an explicitly versioned historical section of this same endpoint or a separately agreed API. Absolute counters can yield an interval average after a gap within a continuous epoch; missed gauge values, short spikes and transitions are not reconstructible.
+
+* Derived metrics and dashboard semantics
+
+** Rates, means and aggregation
+
+For adjacent usable samples with the same resource, collector, metric attributes, counter epoch and monotonic clock identity:
+
+#+begin_example
+elapsed_seconds = (new_sample_ns - old_sample_ns) / 1e9
+rate            = (new_total - old_total) / elapsed_seconds
+mean_io_bytes   = delta(bytes_total) / delta(operations_total)
+mean_accounted_io_seconds
+                = delta(accounted_time_ns_total)
+                  / delta(operations_total) / 1e9
+#+end_example
+
+Require positive elapsed time and denominator. On a decreasing counter, changed epoch, clock discontinuity, or source change, suppress the rate and establish a new baseline. Do not guess wrapping unless the source width/reset behavior is explicitly known. Suppress “current” rate presentation for stale samples or an excessive gap, even if a historical interval average can be computed.
+
+Weight aggregate means by their operation counts; do not average per-host averages. Add independent device byte deltas only at the chosen graph layer. Do not sum APFS shared capacities, multiple observations of the same NFS export, or host NFS totals repeated across mounts. Keep local driver bytes, controller SMART bytes, process bytes and NFS wire bytes as different accounting domains.
+
+For cache-hit ratios, use =delta(hits)/(delta(hits)+delta(misses))= for one cache family and continuous epoch. No events means “no ratio for this interval,” not 100%. A small recent sample count is not a strong performance conclusion.
+
+** Conditions rather than an invented universal health score
+
+| Dashboard condition | Evidence required | Important qualification |
+|---------------------+-------------------+-------------------------|
+| Media warning | SMART state/critical bits, supported vendor condition | Display exact reason and observation age |
+| New I/O failures | Positive error-counter delta or error event | Scope to source/device and epoch |
+| Capacity pressure | Fresh appropriate capacity/limit gauges | Separate APFS container pressure from volume quota |
+| NFS degraded | Kernel status, outstanding-age trend, RPC error/retry trend | Host-wide counters cannot identify the guilty mount by themselves |
+| Integrity concern | Dated checker finding or explicit filesystem error | No recent check means unverified, not clean |
+| Performance change | Meaningful rate/mean trend against workload baseline | Low activity is not necessarily a slow disk |
+| Telemetry stale | Missed/failed collection or heartbeat | Do not assert a disk fault from collector failure alone |
+
+Use fleet/workload-specific thresholds and hysteresis. A historical NVMe unsafe-shutdown or error-log count is not by itself proof of an ongoing failure; changes and current warning bits are more useful together. A SMART pass never replaces integrity/availability evidence.[fn:nvmeprint][fn:smartman]
+
+The baseline deliberately has no “APFS cache-hit ratio,” per-volume block latency percentile, trustworthy generic disk utilization, exact snapshot-deletion reclaim estimate, remote RAID health inferred from =nfsstat=, or native pNFS layout metric. These require a source that actually observes the property.
+
+* Implementation order and acceptance tests
+
+** Stage 1: heartbeat and state ownership
+
+Implement typed configuration, persistent node identity/generation, immutable snapshot publication, one reqwest sender and matching acknowledgements. Start with synthetic collector results. The first startup heartbeat may contain only the host resource and collector phases while storage discovery proceeds.
+
+Acceptance: the sender posts on its own schedule; a stalled fake collector does not delay it; repeated readings keep their IDs/timestamps; wrong-session acknowledgements do not retire evidence; an old agent generation cannot take over current liveness. A fresh heartbeat with old measurements displays live daemon / stale metrics, not healthy disks.
+
+** Stage 2: command-backed baseline
+
+Implement the retained-child command supervisor before enabling =diskutil=, =nfsstat= and =smartctl=. Decode plists/JSON in pure adapters and capture target-Mac fixtures. Preserve nonzero SMART warning results, source versions, missing fields and precision. Use explicit installed paths and a controlled environment.
+
+Acceptance: stdout/stderr floods remain bounded, cancellation does not leak untracked children, nonzero warning-bearing SMART output is parsed, and unsupported features do not produce fabricated zeros. Inventory is transmitted from cache, not recollected on every POST.
+
+** Stage 3: native fast path and NFS isolation
+
+Add IOKit, cached mount APIs and Disk Arbitration. Add SDK-verified NSTATUS and fresh capacity in worker mode. Exercise disappearing/reused mounts, late responses and stuck workers. Validate helper output lengths and integer conversions on both supported architectures.
+
+Acceptance: one unavailable NFS mount cannot occupy more than its slot, cannot grow an unbounded queue, and cannot prevent local I/O or heartbeats. A supervisor restart does not silently reset accounting for surviving workers. Root-squashed/authentication failures remain identity-specific probe failures.
+
+** Stage 4: enrichment and production deployment
+
+Add APFS accounting, installed-provider adapters, logs and opt-in diagnostics according to dashboard needs. Package a signed, versioned Rust binary, pinned optional tool dependencies where required, a tested LaunchDaemon plist, and fixture-backed adapters. Do not add an independent Go/Python monitoring runtime merely to obtain information the Rust adapters already collect.
+
+Acceptance: boot and logout do not end the service; SIGTERM shuts down without an unbounded collector wait; updates retain node identity and increase agent generation; credentials rotate without entering telemetry; logs and retained data stay within budget.
+
+** Test matrix
+
+| Test | Required outcome |
+|------+------------------|
+| Collector sleeps forever while sender runs | Heartbeats continue with running/timeout worker state |
+| Started spawn_blocking task times out | Slot remains occupied; no assumption that abort stopped it |
+| Child exceeds deadline or pipe cap | Immutable failure result, retained ownership, bounded drain/reaper |
+| Successful heartbeat repeats identical SMART/IO sample | One observation stored; liveness advances separately |
+| Partial SMART response after earlier success | New available fields merge; older supported fields retain old age |
+| Counter reset, replug, mount reuse | New epoch/generation; no false rate spike |
+| APFS shared container and snapshots | No summed duplicate capacity or fabricated reclaimable bytes |
+| NFS JSON unsupported/changed | Tested fallback or visible parse/capability failure |
+| Network outage / slow head node / lost acknowledgement | Collection continues; fresh snapshot next attempt; stable event IDs |
+| Duplicate/out-of-order envelope / retired session | Idempotent ingestion; older generation cannot replace live state |
+| Auth failure / 429 / invalid ack / oversized response | Bounded handling; no credential leaks or aggressive retry loop |
+| Payload exceeds configured size | Explicit coverage limit; no inferred disk removals |
+| Clock adjustment / sleep/wake | Original times preserved; new rate baseline where continuity is uncertain |
+| Integer above 2^53 / numeric overflow | Exact round trip or explicit rejection, never float rounding |
+| SIGTERM with blocked worker / restart | Bounded daemon shutdown; surviving-work accounting preserved |
+| Native SDK struct or output changes | Version-specific test failure / unsupported, not unchecked memory access |
+| No SMART through USB/RAID, SIP or privacy denial | Capability limitation visible; no protection-disabling workaround |
+
+The bundle's =validate_contract.py= checks JSON Schema, references, metric kinds/units/scopes, repeated-sample identity, acknowledgement matching, and malformed examples. It also parses the TOML and launchd plist. It is a developer fixture checker; the shipped Rust daemon does not depend on Python. Rust modules and macOS acquisition are implementation work, not validated executable artifacts in this handoff.
+
+* Sources
+
+Apple manual pages linked through the manual mirror reproduce the respective shipped manuals. Apple source branches and third-party tool versions can differ from a deployed OS/tool build. Capture and test the actual target output. The source links support observation semantics; the proposed metric names, schedules, identity rules and transport are design choices.
+
+[fn:diskutil] Apple, diskutil(8), [[https://keith.github.io/xcode-man-pages/diskutil.8.html][manual]].
+[fn:mountheader] Apple, XNU bsd/sys/mount.h, [[https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/mount.h][source]].
+[fn:blockheader] Apple, IOStorageFamily/IOBlockStorageDriver.h, [[https://raw.githubusercontent.com/apple-oss-distributions/IOStorageFamily/main/IOBlockStorageDriver.h][source]].
+[fn:smartman] smartmontools maintainers, smartctl(8), [[https://raw.githubusercontent.com/smartmontools/smartmontools/master/smartmontools/smartctl.8.in][source manual]].
+[fn:nfsstatman] Apple, NFS/nfsstat/nfsstat.1, [[https://raw.githubusercontent.com/apple-oss-distributions/NFS/main/nfsstat/nfsstat.1][source manual]].
+[fn:apfsfoundation] Apple, About Apple File System, [[https://developer.apple.com/documentation/foundation/about-apple-file-system][documentation]].
+[fn:dadisk] Apple, DiskArbitration/DADisk.h, [[https://raw.githubusercontent.com/apple-oss-distributions/DiskArbitration/main/DiskArbitration/DADisk.h][source]].
+[fn:daguide] Apple, Disk Arbitration Programming Guide, [[https://developer.apple.com/library/archive/documentation/DriversKernelHardware/Conceptual/DiskArbitrationProgGuide/Introduction/Introduction.html][guide]].
+[fn:blocksource] Apple, IOStorageFamily/IOBlockStorageDriver.cpp, especially prepareRequestCompletion, [[https://raw.githubusercontent.com/apple-oss-distributions/IOStorageFamily/main/IOBlockStorageDriver.cpp][source]].
+[fn:getmntinfo] Apple/BSD, getmntinfo(3), [[https://keith.github.io/xcode-man-pages/getmntinfo.3.html][manual]].
+[fn:getfsstat] Apple/BSD, getfsstat(2), [[https://keith.github.io/xcode-man-pages/getfsstat.2.html][manual]].
+[fn:attrheader] Apple, XNU bsd/sys/attr.h, [[https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/attr.h][source]].
+[fn:foundation] Apple, URLResourceValues, [[https://developer.apple.com/documentation/foundation/urlresourcevalues][documentation]].
+[fn:capacity] Apple, volumeAvailableCapacityForImportantUsage, [[https://developer.apple.com/documentation/foundation/urlresourcevalues/volumeavailablecapacityforimportantusage][documentation]].
+[fn:dfsource] Apple, file_cmds/df/df.c, especially regetmntinfo and usedblks, [[https://raw.githubusercontent.com/apple-oss-distributions/file_cmds/main/df/df.c][source]].
+[fn:dfman] Apple/BSD, df(1), [[https://keith.github.io/xcode-man-pages/df.1.html][manual]].
+[fn:smartdarwin] smartmontools maintainers, os_darwin.cpp, [[https://raw.githubusercontent.com/smartmontools/smartmontools/master/smartmontools/os_darwin.cpp][source]].
+[fn:nvmeprint] smartmontools maintainers, nvmeprint.cpp, [[https://raw.githubusercontent.com/smartmontools/smartmontools/master/smartmontools/nvmeprint.cpp][source]].
+[fn:nfsstatcode] Apple, NFS/nfsstat/nfsstat.c, [[https://raw.githubusercontent.com/apple-oss-distributions/NFS/main/nfsstat/nfsstat.c][source]].
+[fn:vfssource] Apple, XNU bsd/vfs/vfs_subr.c, especially sysctl_vfs_ctlbyfsid, [[https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/vfs/vfs_subr.c][source]].
+[fn:nfskernel] Apple, NFS/kext/nfs_vfsops.c, especially nfs_vfs_sysctl and VFS_CTL_NSTATUS, [[https://raw.githubusercontent.com/apple-oss-distributions/NFS/main/kext/nfs_vfsops.c][source]].
+[fn:mountnfs] Apple, NFS/mount_nfs/mount_nfs.8, [[https://raw.githubusercontent.com/apple-oss-distributions/NFS/main/mount_nfs/mount_nfs.8][source manual]].
+[fn:nfssupport] Marcel Bresink, NFS Manager description, [[https://www.bresink.com/osx/NFSManager.html][support matrix]].
+[fn:systemprofiler] Apple, system_profiler(8), [[https://keith.github.io/xcode-man-pages/system_profiler.8.html][manual]].
+[fn:hdiutil] Apple, hdiutil(1), [[https://keith.github.io/xcode-man-pages/hdiutil.1.html][manual]].
+[fn:fdesetup] Apple, fdesetup(8), [[https://keith.github.io/xcode-man-pages/fdesetup.8.html][manual]].
+[fn:lsvfs] Apple/BSD, lsvfs(1), [[https://keith.github.io/xcode-man-pages/lsvfs.1.html][manual]].
+[fn:apfsutil] Apple, apfs.util(8), [[https://keith.github.io/xcode-man-pages/apfs.util.8.html][manual]].
+[fn:tmutil] Apple, tmutil(8), [[https://keith.github.io/xcode-man-pages/tmutil.8.html][manual]].
+[fn:snapshot] Apple, fs_snapshot_create(2) family including fs_snapshot_list, [[https://keith.github.io/xcode-man-pages/fs_snapshot_create.2.html][manual]].
+[fn:snapshotgui] Apple, View APFS snapshots in Disk Utility on Mac, [[https://support.apple.com/guide/disk-utility/view-apfs-snapshots-dskuf82354dc/mac][guide]].
+[fn:quota] Apple/BSD, quota(1), [[https://keith.github.io/xcode-man-pages/quota.1.html][manual]].
+[fn:diskheader] Apple, XNU bsd/sys/disk.h, [[https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/disk.h][source]].
+[fn:iostat] Apple/BSD, iostat(8), [[https://keith.github.io/xcode-man-pages/iostat.8.html][manual]].
+[fn:powermetrics] Apple, powermetrics(1), [[https://keith.github.io/xcode-man-pages/powermetrics.1.html][manual]].
+[fn:resource] Apple, XNU bsd/sys/resource.h, [[https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/resource.h][source]].
+[fn:libproc] Apple, XNU libsyscall/wrappers/libproc/libproc.h, [[https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/libsyscall/wrappers/libproc/libproc.h][source]].
+[fn:fsusage] Apple, fs_usage(1), [[https://keith.github.io/xcode-man-pages/fs_usage.1.html][manual]].
+[fn:lsof] lsof maintainers / Apple distribution, lsof(8), [[https://keith.github.io/xcode-man-pages/lsof.8.html][manual]].
+[fn:xctrace] Apple, xctrace(1), [[https://keith.github.io/xcode-man-pages/xctrace.1.html][manual]].
+[fn:sip] Apple, System Integrity Protection Guide: Runtime Protections, [[https://developer.apple.com/library/archive/documentation/Security/Conceptual/System_Integrity_Protection_Guide/RuntimeProtections/RuntimeProtections.html][guide]].
+[fn:es] Apple, Endpoint Security, [[https://developer.apple.com/documentation/endpointsecurity][documentation]].
+[fn:vmstat] Apple, vm_stat(1), [[https://keith.github.io/xcode-man-pages/vm_stat.1.html][manual]].
+[fn:rpcinfo] Apple/BSD, rpcinfo(8), [[https://keith.github.io/xcode-man-pages/rpcinfo.8.html][manual]].
+[fn:showmount] Apple/BSD, showmount(8), [[https://keith.github.io/xcode-man-pages/showmount.8.html][manual]].
+[fn:netstat] Apple/BSD, netstat(1), [[https://keith.github.io/xcode-man-pages/netstat.1.html][manual]].
+[fn:nettop] Apple, nettop(1), [[https://keith.github.io/xcode-man-pages/nettop.1.html][manual]].
+[fn:tcpdump] tcpdump maintainers / Apple distribution, tcpdump(1), [[https://keith.github.io/xcode-man-pages/tcpdump.1.html][manual]].
+[fn:tshark] Wireshark Foundation, tshark(1), especially RPC SRT statistics, [[https://www.wireshark.org/docs/man-pages/tshark.html][manual]].
+[fn:libnfs] libnfs maintainers, README and high-level synchronous/asynchronous APIs, [[https://github.com/sahlberg/libnfs][repository]].
+[fn:ncctl] Apple, NFS/ncctl/ncctl.c, [[https://raw.githubusercontent.com/apple-oss-distributions/NFS/main/ncctl/ncctl.c][source]].
+[fn:nfs4mapid] Apple, nfs4mapid(8), [[https://keith.github.io/xcode-man-pages/nfs4mapid.8.html][manual]].
+[fn:nfsdissector] Wireshark Foundation, NFS display-filter reference, [[https://www.wireshark.org/docs/dfref/n/nfs.html][reference]].
+[fn:log] Apple, log(1), [[https://keith.github.io/xcode-man-pages/log.1.html][manual]].
+[fn:fsevents] Apple, File System Events Programming Guide, [[https://developer.apple.com/library/archive/documentation/Darwin/Conceptual/FSEvents_ProgGuide/Introduction/Introduction.html][guide]].
+[fn:fsckapfs] Apple, fsck_apfs(8), [[https://keith.github.io/xcode-man-pages/fsck_apfs.8.html][manual]].
+[fn:fsckhfs] Apple, fsck_hfs(8), [[https://keith.github.io/xcode-man-pages/fsck_hfs.8.html][manual]].
+[fn:fsckexfat] Apple, fsck_exfat(8), [[https://keith.github.io/xcode-man-pages/fsck_exfat.8.html][manual]].
+[fn:fsckmsdos] Apple/BSD, fsck_msdos(8), [[https://keith.github.io/xcode-man-pages/fsck_msdos.8.html][manual]].
+[fn:sysdiagnose] Apple, sysdiagnose(1), [[https://keith.github.io/xcode-man-pages/sysdiagnose.1.html][manual]].
+[fn:zpoolstatus] OpenZFS, zpool-status(8), [[https://openzfs.github.io/openzfs-docs/man/master/8/zpool-status.8.html][manual]].
+[fn:zpooliostat] OpenZFS, zpool-iostat(8), [[https://openzfs.github.io/openzfs-docs/man/master/8/zpool-iostat.8.html][manual]].
+[fn:gopsutil] gopsutil maintainers, disk/disk_darwin.go, [[https://raw.githubusercontent.com/shirou/gopsutil/master/disk/disk_darwin.go][Darwin implementation]].
+[fn:telegrafdiskio] InfluxData, Telegraf diskio input, [[https://raw.githubusercontent.com/influxdata/telegraf/master/plugins/inputs/diskio/README.md][documentation]].
+[fn:nfssocket] Apple, NFS/kext/nfs_socket.c, nfs_noremotehang and nfs_sigintr, [[https://raw.githubusercontent.com/apple-oss-distributions/NFS/main/kext/nfs_socket.c][source]].
+[fn:launchd] Apple, Creating Launch Daemons and Agents, [[https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html][guide]].
+
+[fn:rustwatch] Tokio maintainers, tokio::sync::watch, [[https://docs.rs/tokio/latest/tokio/sync/watch/][documentation]].
+[fn:rustblocking] Tokio maintainers, spawn_blocking and cancellation/shutdown limits, [[https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html][documentation]].
+[fn:rusttimeout] Tokio maintainers, timeout, [[https://docs.rs/tokio/latest/tokio/time/fn.timeout.html][documentation]].
+[fn:rustchild] Tokio maintainers, Child lifecycle, start_kill, kill, wait and try_wait, [[https://docs.rs/tokio/latest/tokio/process/struct.Child.html][documentation]].
+[fn:rustmissed] Tokio maintainers, MissedTickBehavior, [[https://docs.rs/tokio/latest/tokio/time/enum.MissedTickBehavior.html][documentation]].
+[fn:rusthttp] reqwest maintainers, ClientBuilder, [[https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html][documentation]].
+[fn:rustretry] reqwest maintainers, retry::never, [[https://docs.rs/reqwest/latest/reqwest/retry/fn.never.html][documentation]].
+[fn:rustplist] plist maintainers, Rust plist crate, [[https://docs.rs/plist/latest/plist/][documentation]].
+[fn:rustiokit] objc2 maintainers, objc2-io-kit, [[https://docs.rs/objc2-io-kit/latest/objc2_io_kit/][documentation]].
+[fn:rustcf] objc2 maintainers, objc2-core-foundation, [[https://docs.rs/objc2-core-foundation/latest/objc2_core_foundation/][documentation]].
+[fn:rustda] objc2 maintainers, objc2-disk-arbitration, [[https://docs.rs/objc2-disk-arbitration/latest/objc2_disk_arbitration/][documentation]].
+[fn:rustfoundation] objc2 maintainers, objc2-foundation, [[https://docs.rs/objc2-foundation/latest/objc2_foundation/][documentation]].
+[fn:rustlibc] Rust libc maintainers, Darwin declarations, [[https://raw.githubusercontent.com/rust-lang/libc/main/src/unix/bsd/apple/mod.rs][source]].
+[fn:rustbindgen] bindgen maintainers, build-time FFI binding generator, [[https://docs.rs/bindgen/latest/bindgen/][documentation]].
+[fn:rustnumber] serde_json maintainers, Number and integer accessors, [[https://docs.rs/serde_json/latest/serde_json/struct.Number.html][documentation]].
+[fn:rustdisplay] serde_with maintainers, DisplayFromStr, [[https://docs.rs/serde_with/latest/serde_with/struct.DisplayFromStr.html][documentation]].

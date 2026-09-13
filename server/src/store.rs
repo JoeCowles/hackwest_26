@@ -67,12 +67,19 @@ impl AppState {
             .fetch_one(&db)
             .await?;
         anyhow::ensure!(
-            version <= 1,
+            version <= 2,
             "Database schema is newer than this application"
         );
-        sqlx::raw_sql(include_str!("../migrations/001_init.sql"))
-            .execute(&db)
-            .await?;
+        let mut migration = db.begin().await?;
+        if version == 0 {
+            sqlx::raw_sql(include_str!("../migrations/001_init.sql"))
+                .execute(&mut *migration).await?;
+        }
+        if version < 2 {
+            sqlx::raw_sql(include_str!("../migrations/002_ciderd.sql"))
+                .execute(&mut *migration).await?;
+        }
+        migration.commit().await?;
         Ok(Self {
             db,
             admin_hash: fingerprint(admin_token.as_bytes()),

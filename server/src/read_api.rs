@@ -272,7 +272,13 @@ fn aggregate(values: Vec<Value>, unit: &str, exact: bool) -> Value {
     out["scope"] = json!("aggregate");
     out["coverage"] = json!({"observed":valid.len(),"expected":values.len()});
     if valid.is_empty() { return out; }
-    out["value"] = if exact { json!(valid.iter().filter_map(|m| integer(m)).sum::<u128>().to_string()) }
+    out["value"] = if exact {
+        let Some(total) = valid.iter().filter_map(|m| integer(m)).try_fold(0u128, u128::checked_add) else {
+            out["reason"] = json!("aggregate_overflow");
+            return out;
+        };
+        json!(total.to_string())
+    }
         else { json!(valid.iter().filter_map(|m| number(m)).sum::<f64>()) };
     out["state"] = json!("ok");
     out["observed_at"] = json!(valid.iter().filter_map(|m| m["observed_at"].as_str()).min());
@@ -316,22 +322,29 @@ fn freshness(name: &str) -> i64 {
     else { 90 }
 }
 fn from_latest(raw: &Value, now: i64, active: bool, boot: Option<&str>, generation: &str) -> Value {
+    let raw = crate::cider_api::read_sample(raw, now);
     let sample = &raw["sample"];
     let observed = sample["observed_at"].as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d| d.timestamp_millis());
-    let age = observed.map(|at| (now - at).max(0) as f64 / 1000.0);
+    let age = if raw.get("ciderd").is_some() {
+        let received = raw["received_at"].as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d| d.timestamp_millis());
+        raw["ciderd"]["age_at_receipt_seconds"].as_f64().zip(received)
+            .map(|(age, at)| age + (now - at).max(0) as f64 / 1000.0)
+    } else { observed.map(|at| (now - at).max(0) as f64 / 1000.0) };
+    let stale_after = raw["ciderd"]["stale_after_seconds"].as_u64()
+        .map(|seconds| seconds as f64).unwrap_or_else(|| freshness(sample["name"].as_str().unwrap_or("")) as f64);
     let old_identity = !active || raw["boot_id"].as_str() != boot || raw["inventory_generation"].as_str() != Some(generation);
     let mut state = sample["state"].as_str().unwrap_or("unknown");
-    if old_identity || (state == "ok" && age.is_none_or(|age| age > freshness(sample["name"].as_str().unwrap_or("")) as f64)) { state = "stale"; }
+    if old_identity || (state == "ok" && age.is_none_or(|age| age > stale_after)) { state = "stale"; }
     let mut val = sample["value"].clone();
     if sample["kind"] == "counter" || sample["unit"] == "bytes" {
         val = if let Some(n) = val.as_u64() { json!(n.to_string()) }
-            else if val.as_str().is_some_and(|s| s.parse::<u64>().is_ok()) { val }
+            else if val.as_str().is_some_and(|s| s.parse::<u128>().is_ok()) { val }
             else { Value::Null };
         if val.is_null() && state == "ok" { state = "unknown"; }
     }
     json!({"value":val,"kind":sample["kind"],"unit":sample["unit"],"state":state,
         "source":sample["source"],"scope":raw["scope"],"observed_at":sample["observed_at"],"received_at":raw["received_at"],"age_seconds":age,
-        "boot_id":raw["boot_id"],"inventory_generation":raw["inventory_generation"],"labels":sample["labels"],
+        "boot_id":raw["boot_id"],"inventory_generation":raw["inventory_generation"],"labels":sample["labels"],"ciderd":raw["ciderd"],
         "derived_rate_per_second":if state == "ok" {raw["derived_rate_per_second"].clone()} else {Value::Null},"derivation_state":raw["derivation_state"]})
 }
 fn rate(object: &Value, name: &str) -> Value {
@@ -410,6 +423,8 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
         let id: String = row.get("node_id");
         let owned: Vec<_> = objects.iter().filter(|o| o["node_id"] == id && o["active"] == true).collect();
         let devices: Vec<_> = owned.iter().copied().filter(|o| o["kind"] == "device").collect();
+    let has_driver_io = devices.iter().any(|device| device["properties"]["throughput_scope"] == "iokit_driver");
+    let io_devices: Vec<_> = devices.iter().copied().filter(|device| !has_driver_io || device["properties"]["throughput_scope"] == "iokit_driver").collect();
         let root = owned.iter().find(|o| o["kind"] == "node").copied();
         let agent = value(&row, "agent_json")?; let last_seen: Option<i64> = row.get("last_seen_at");
         let age = last_seen.map(|at| (now - at).max(0) as f64 / 1000.0);
@@ -422,8 +437,8 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
             "os_version":root.map(|o|metric(o,"node_os_version","string")["value"].clone()).unwrap_or(Value::Null),"agent_version":agent["version"],
             "inventory_generation":row.get::<i64,_>("inventory_generation").to_string(),"last_seen_at":last_seen.map(store::timestamp),"last_seen_age_seconds":age,"heartbeat_interval_seconds":5,
             "availability":availability,"health":health(availability,&cap),"active_alert_count":null,"alerts_available":false,"capacity":cap,
-            "read_bytes_per_second":aggregate(devices.iter().map(|o|rate(o,"device_read_bytes_total")).collect(),"bytes/second",false),
-            "write_bytes_per_second":aggregate(devices.iter().map(|o|rate(o,"device_write_bytes_total")).collect(),"bytes/second",false),"temperature_celsius":temperature,
+            "read_bytes_per_second":aggregate(io_devices.iter().map(|o|rate(o,"device_read_bytes_total")).collect(),"bytes/second",false),
+            "write_bytes_per_second":aggregate(io_devices.iter().map(|o|rate(o,"device_write_bytes_total")).collect(),"bytes/second",false),"temperature_celsius":temperature,
             "capabilities":["inventory","telemetry"],"enrolled_at":store::timestamp(row.get("enrolled_at")),
             "inventory_updated_at":inventory_times.iter().find(|r|r.get::<String,_>("node_id")==id).map(|r|store::timestamp(r.get("updated"))),
             "inventory_url":format!("/api/v1/nodes/{id}/inventory")});

@@ -1,125 +1,103 @@
-# Orchard Server
+# Orchard storage monitoring
 
-Rust macOS application and durable storage-telemetry ingestion service.
+Rust macOS collector, Rust native central server, and an authenticated live web
+console for storage telemetry.
 
-The shared [Server Spec](https://docs.google.com/document/d/1JnsZHlYPXQ1IRsMSEHeboICzqqviKJylI7gRsuUK13E/edit?tab=t.bclfm0yxwd6r)
-is the API source of truth. Section 14 contains the **planned** web and monitoring
-routes; section 15 describes the core ingestion implementation. The existing
-`web/` console is a separate fixture-driven frontend and is not connected yet.
+- `server/`: `orchard-server`, a native macOS control application with SQLite,
+  TLS, enrollment, ingestion, and read APIs. It does not run node collectors.
+- `crates/ciderd/`: the macOS storage collector and its schema-2 wire contract,
+  collectors, isolated workers, fixtures, daemon configuration, and launchd example.
+- `web/`: the Orchard Cluster Console, using live authenticated server reads.
+- `scripts/`: project-local Cargo wrapper, macOS packaging, and synthetic demo client.
+- `flake.nix` and `flake.lock`: the collector branch's optional Nix development environment.
 
-## Run on macOS
+## Source of truth
+
+The [Server Spec](https://docs.google.com/document/d/1JnsZHlYPXQ1IRsMSEHeboICzqqviKJylI7gRsuUK13E/edit?tab=t.bclfm0yxwd6r)
+defines the receiver API. Section 15 documents v1 ingestion, section 16 the live
+read API, and section 17 the ciderd compatibility endpoint. Planned monitoring
+features are not implied to be implemented by their appearance in section 14.
+The exact collector models, catalog, and JSON schemas live in
+`crates/ciderd/contract/` and `crates/ciderd/src/model.rs`.
+
+## Run the server
+
+Install Rust and the Xcode command-line tools. The Cargo wrapper also supports
+this checkout's ignored project-local Rust installation.
 
 ```sh
 bash scripts/cargo-local.sh run --package orchard-server
 ```
 
-The native window displays the API address and storage counters, creates
-single-use enrollment tokens, and lets the local administrator copy credentials.
-Closing the window stops the server. To run without the window:
+The native window owns the server lifetime, creates one-use enrollment tokens,
+and opens the live web console. Default binding is `http://127.0.0.1:8787`.
+Default macOS state is `~/Library/Application Support/Orchard Server/`; do not
+commit its credentials or database. `--headless` runs without the native window.
 
-```sh
-bash scripts/cargo-local.sh run --package orchard-server -- --headless
-```
-
-By default the server listens at `http://127.0.0.1:8787`. Data and the owner-only
-admin credential are in `~/Library/Application Support/Orchard Server/`.
-The credential is never printed by the server. Preserve this directory across
-upgrades; it contains node identity, deduplication state, and the SQLite database.
-Only one process can open the same data directory.
-
-For LAN access, use a certificate trusted by your client machines:
+For real collectors, enable TLS even on loopback:
 
 ```sh
 bash scripts/cargo-local.sh run --package orchard-server -- \
-  --bind 0.0.0.0:8787 --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+  --bind 127.0.0.1:8787 \
+  --tls-cert /absolute/path/server-cert.pem \
+  --tls-key /absolute/path/server-key.pem
 ```
 
-The server rejects non-loopback plaintext binding. Configuration can also use
-`ORCHARD_BIND`, `ORCHARD_DATA_DIR`, `ORCHARD_TLS_CERT`, and `ORCHARD_TLS_KEY`.
-There is no certificate generation, trust-store modification, automatic LAN
-discovery, login item, or background launch daemon in this version.
+Clients must trust the certificate and its hostname/IP. Non-loopback binding
+requires TLS. No trust root or launch daemon is installed automatically.
+Use the server's console link rather than opening `web/index.html` as a file;
+the live API is same-origin and uses a separate read-only viewer credential.
 
-## Build the macOS app
+## Connect ciderd
+
+Build/install the collector separately, following `crates/ciderd/README.md`.
+Adapt `crates/ciderd/examples/ciderd.toml` with absolute local paths, the server's
+HTTPS address, and an optional private-CA certificate file. Its endpoint is
+`/api/v2/ciderd/heartbeat`, with a five-second heartbeat interval. Slower and
+potentially blocking collectors remain independent of that cadence.
+
+Use a new one-use token from the native server window, stored in a private file:
 
 ```sh
-bash scripts/package-macos.sh
-open 'dist/Orchard Server.app'
+ciderd enroll-server --config /etc/ciderd.toml --name studio-mac \
+  --enrollment-token-file /secure/enrollment-token
+ciderd run --config /etc/ciderd.toml
 ```
 
-The script creates an app for the build machine's architecture and ad-hoc signs
-it for local use. Apple Developer ID signing/notarization for distribution is
-not included. Use `bash scripts/package-macos.sh debug` for a quicker local build.
+Enrollment stores a mode-0600 node credential and a matching persistent identity,
+refuses to overwrite either, and does not print the credential. Do not run the
+local-only `enroll` command first. Partial enrollment or a lost network response
+requires explicit recovery; the single-use exchange is not retried. Production
+collector installation uses the root-owned paths described in its README.
 
-## Implemented core routes
+The compatibility endpoint preserves immutable collection IDs, exact decimal
+integers, counter epochs, monotonic acquisition times, explicit availability,
+and tombstone-based inventory removal. It projects supported storage metrics
+into the existing dashboard API; additional catalog metrics retain their
+schema-2 names and provenance. Cached MNT_NOWAIT observations do not substitute
+for fresh filesystem-capacity measurements. Physical devices and IOKit driver
+observations are not summed twice. Shared NFS capacity remains unknown unless
+an authoritative shared filesystem identity is supplied.
 
-| Method | Route | Credential |
-| --- | --- | --- |
-| POST | `/api/v1/enrollment-tokens` | Administrator |
-| POST | `/api/v1/nodes/enroll` | One-time token in body |
-| PUT | `/api/v1/nodes/{node_id}/inventory` | Matching node |
-| POST | `/api/v1/nodes/{node_id}/telemetry` | Matching node |
-| POST | `/api/v1/nodes/{node_id}/heartbeat` | Matching node |
-| POST | `/api/v1/nodes/{node_id}/goodbye` | Matching node |
-| DELETE | `/api/v1/nodes/{node_id}/credential` | Administrator |
+Do not send legacy v1 inventory/telemetry and schema-2 heartbeats using the same
+node identity. Existing v1 clients keep their original endpoints and contract.
+The SQLite migration adds schema-2 receiver state and raises the schema version
+to 2; an older server refuses this newer database. Back up state before running
+a newly built server against an existing installation.
 
-Every mutation requires `X-Request-ID` (fresh UUID) and `X-Request-Timestamp`
-(RFC3339 within 300 seconds). Protected routes also require
-`Authorization: Bearer <credential>`. Send a heartbeat every **5 seconds**.
-See section 15 of the Google Doc for complete payloads and retry semantics.
-
-All writes are transactional, with SHA-256 credential hashes, single-use
-enrollment tokens, and persisted replay IDs. An accepted telemetry batch is
-durable before HTTP 202 is returned. Duplicate `(node_id, boot_id, sequence)`
-batches do not insert samples or events twice. Reusing that identity with a
-different payload returns 409. The JSON body limit is 1 MiB.
-
-Objects have stable server IDs based on node identity and collector-local IDs.
-Inventory snapshots preserve history. Counter rates retain boot/generation and
-observation-state boundaries; raw counters remain exact. A worker writes
-5-minute/hourly rollups and expires old raw data, receipts, and events.
-
-## Synthetic demo
-
-Start the server, then run:
+## Build a macOS server bundle
 
 ```sh
-node scripts/demo-node.mjs
+bash scripts/package-macos.sh debug
 ```
 
-This creates one synthetic node and sends twelve batches at 5-second intervals.
-It does not collect data from this Mac. Override `ORCHARD_URL`,
-`ORCHARD_ADMIN_TOKEN_FILE`, or `ORCHARD_DEMO_BATCHES` if needed. The demo sends
-goodbye on completion. It never prints credentials.
+The script produces `dist/Orchard Server.app` with an ad-hoc signature. Developer
+ID signing and notarization remain separate release work.
 
-## Development
+## Integration status
 
-```sh
-bash scripts/cargo-local.sh test --workspace
-bash scripts/cargo-local.sh check --workspace
-```
-
-The project-local Rust toolchain under `.codex-staging/` is a convenience for
-this checkout and is ignored by version control. Other developers can use their
-normal Rust installation. Xcode command-line tools are needed on macOS.
-
-Deferred: section 14 read/monitoring routes, public OpenAPI discovery, frontend
-integration, alert evaluation/delivery, and collector implementations. The
-native window reads local server operational state; it is not the web dashboard.
-
-## Live frontend integration update
-
-This section supersedes the earlier statement that all web read endpoints are
-planned. The server now includes eight read routes and embeds the web console
-at `/`. See `web/README.md` for the viewer-credential connection flow and Server
-Spec section 16 for the exact supported API subset. Rebuild/restart to include
-these source changes; the previously packaged application is not updated by
-editing source files. This change has not been built, tested, or visually checked.
-
-Implemented read routes: `/api/v1/cluster`, `/api/v1/nodes`,
-`/api/v1/nodes/{node_id}`, `/api/v1/nodes/{node_id}/inventory`,
-`/api/v1/objects/{object_id}`, `/api/v1/filesystems`, `/api/v1/events`, and
-`/api/v1/capabilities`. The viewer credential is read-only and expires eight
-hours after startup. The native app can copy it and open the console.
-
-Historical inventory/metric queries, alert management, SSE, OpenAPI discovery,
-Prometheus, and health/readiness monitoring endpoints remain planned.
+The collector branch is integrated alongside the server and web console. The
+compatibility changes have not been compiled, tested, or smoke-tested, and the
+existing packaged application has not been rebuilt. Earlier core-server test
+results do not validate this integration. Alert evaluation/delivery, historical
+read routes, Prometheus/SSE, and other planned APIs remain separate work.

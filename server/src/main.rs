@@ -42,7 +42,11 @@ fn main() -> Result<()> {
     let stop = CancellationToken::new();
     let server_status = Arc::new(RwLock::new(format!("Listening on {url}")));
     read_api::write_viewer_file(&files.directory, &state.viewer_token)?;
-    let router = api::router(state.clone()).merge(read_api::router(state.clone()));
+    // The workspace includes both rustls providers; select the server provider explicitly.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let router = api::router(state.clone())
+        .merge(read_api::router(state.clone()))
+        .merge(orchard_server::cider_api::router(state.clone()));
     let status = server_status.clone();
     let shutdown = stop.clone();
     let tls_paths = config.tls_cert.clone().zip(config.tls_key.clone());
