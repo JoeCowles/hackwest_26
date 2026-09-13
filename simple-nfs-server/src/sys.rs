@@ -1,8 +1,6 @@
 //! Thin wrappers around the system commands this tool depends on.
 
 use anyhow::{Context, Result, bail};
-use std::process::Output;
-use std::time::Duration;
 use tokio::process::Command;
 
 pub fn is_root() -> bool {
@@ -22,29 +20,6 @@ pub fn require_macos() -> Result<()> {
         bail!("macOS only");
     }
     Ok(())
-}
-
-/// Outcome of a time-bounded command.
-pub enum Bounded {
-    Finished(Output),
-    TimedOut,
-}
-
-/// Run a command with a wall-clock bound. A hung NFS mount makes `df` and `stat`
-/// block indefinitely, so an unbounded probe would wedge the sampler exactly when
-/// it has something worth reporting.
-pub async fn run_bounded(timeout: Duration, program: &str, args: &[&str]) -> Result<Bounded> {
-    let child = Command::new(program)
-        .args(args)
-        .kill_on_drop(true)
-        .output();
-
-    match tokio::time::timeout(timeout, child).await {
-        Ok(result) => Ok(Bounded::Finished(
-            result.with_context(|| format!("spawning {program}"))?,
-        )),
-        Err(_elapsed) => Ok(Bounded::TimedOut),
-    }
 }
 
 /// Run a command to completion and return stdout, failing on non-zero exit.

@@ -20,7 +20,6 @@ allowed_mask = "255.255.255.0"
 # Omit map_mode to write no mapping option at all (UIDs pass through as-is).
 #
 # mapall defeats AUTH_SYS UID spoofing but destroys per-user attribution.
-# See docs/threat-model.md §1.1 before changing this.
 map_mode = "mapall"
 map_identity = "nobody:nobody"
 
@@ -34,21 +33,7 @@ nfs_server = "192.168.1.10"
 mount_point = "/Users/Shared/nfs/cluster"
 
 # "3" is the reliable default for a macOS-served export.
-# See README "NFS version" before switching to "4".
 nfs_vers = "3"
 
 # resvport is required when mounting a macOS-served export.
 mount_opts = ["resvport", "rw", "hard", "intr"]
-
-[monitor]
-sample_interval_secs = 30
-
-# Hard wall-clock bound on every probe. A hung NFS mount blocks df forever.
-probe_timeout_secs = 5
-
-# Where the daemon appends newline-delimited JSON samples.
-metrics_log = "/usr/local/var/log/orchard-nfs/samples.ndjson"
-
-# Optional. If set, each sample is also POSTed here as JSON.
-# Omit to keep the daemon entirely local.
-#metrics_endpoint = "https://central.example:8443/api/v1/nodes/NODE_ID/telemetry"

@@ -45,7 +45,7 @@ pub fn with_managed_block(content: &str, export_line: &str) -> String {
     out.push_str(BEGIN_MARK);
     out.push('\n');
     out.push_str(&format!(
-        "# generated {} by orchard-nfs setup-server\n",
+        "# generated {} by simple-nfs-server setup-server\n",
         chrono::Local::now().to_rfc3339()
     ));
     out.push_str(export_line);
@@ -114,7 +114,10 @@ pub async fn setup(cfg: &Config) -> Result<()> {
         match &backup_path {
             Some(b) => {
                 std::fs::copy(b, exports)?;
-                anyhow::bail!("nfsd checkexports rejected the configuration; restored {}", b.display());
+                anyhow::bail!(
+                    "nfsd checkexports rejected the configuration; restored {}",
+                    b.display()
+                );
             }
             None => {
                 std::fs::remove_file(exports)?;
@@ -152,11 +155,11 @@ pub async fn teardown(stop_nfsd: bool) -> Result<()> {
 
     let current = std::fs::read_to_string(exports)?;
     if !has_managed_block(&current) {
-        info!("no orchard-nfs block in {EXPORTS}; nothing to remove");
+        info!("no simple-nfs-server block in {EXPORTS}; nothing to remove");
     } else {
         backup(exports)?;
         std::fs::write(exports, strip_managed_block(&current))?;
-        info!("removed orchard-nfs block from {EXPORTS}");
+        info!("removed simple-nfs-server block from {EXPORTS}");
         if sys::run_ok("nfsd", &["status"]).await? {
             sys::run("nfsd", &["update"]).await?;
             info!("exports reloaded");

@@ -41,7 +41,10 @@ pub async fn mount(cfg: &Config) -> Result<()> {
         .into_iter()
         .find(|m| m.mount_point == mp)
     {
-        info!("already mounted at {mp}: {} ({})", existing.source, existing.options);
+        info!(
+            "already mounted at {mp}: {} ({})",
+            existing.source, existing.options
+        );
         return Ok(());
     }
 
@@ -63,9 +66,11 @@ pub async fn mount(cfg: &Config) -> Result<()> {
         .into_iter()
         .find(|m| m.mount_point == mp)
     {
-        println!("negotiated: {} on {} ({})", m.source, m.mount_point, m.options);
+        println!(
+            "negotiated: {} on {} ({})",
+            m.source, m.mount_point, m.options
+        );
     }
-    println!("{}", sys::run("df", &["-h", &mp]).await?);
     println!("to unmount: sudo umount {mp}");
     Ok(())
 }

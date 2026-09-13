@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     pub server: ServerConfig,
     pub client: ClientConfig,
-    pub monitor: MonitorConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,27 +57,6 @@ fn default_mount_opts() -> Vec<String> {
         .iter()
         .map(|s| s.to_string())
         .collect()
-}
-
-#[derive(Debug, Deserialize)]
-pub struct MonitorConfig {
-    #[serde(default = "default_interval")]
-    pub sample_interval_secs: u64,
-    #[serde(default = "default_probe_timeout")]
-    pub probe_timeout_secs: u64,
-    #[serde(default)]
-    pub metrics_log: Option<PathBuf>,
-    /// Optional HTTP collector. Left unset the agent stays entirely local.
-    #[serde(default)]
-    pub metrics_endpoint: Option<String>,
-}
-
-fn default_interval() -> u64 {
-    30
-}
-
-fn default_probe_timeout() -> u64 {
-    5
 }
 
 impl Config {
@@ -169,12 +147,6 @@ mod tests {
                 mount_point: PathBuf::from("/Users/Shared/nfs/cluster"),
                 nfs_vers: default_vers(),
                 mount_opts: default_mount_opts(),
-            },
-            monitor: MonitorConfig {
-                sample_interval_secs: default_interval(),
-                probe_timeout_secs: default_probe_timeout(),
-                metrics_log: None,
-                metrics_endpoint: None,
             },
         }
     }
