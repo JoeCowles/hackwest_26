@@ -14,6 +14,7 @@ const READ_ROUTES: &[&str] = &[
     "/api/v1/filesystems", "/api/v1/events", "/api/v1/capabilities",
     "/api/v1/findings", "/api/v1/findings/{finding_id}",
     "/api/v1/detectors/storage-activity/sources",
+    "/api/v1/security/rule-sources", "/api/v1/security/rule-findings", "/api/v1/security/rule-findings/{finding_id}",
     "/api/v1/reliability/sources", "/api/v1/reliability/findings", "/api/v1/reliability/findings/{finding_id}",
     "/api/v1/attention", "/api/v1/attention/summary", "/api/v1/notifications/settings",
     "/api/v1/quotas", "/api/v1/diagnostics",
@@ -179,6 +180,9 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
     if matches!(resource, "findings" | "detectors") {
         return detection_read(state, path, &parts, query, owner, request_id).await;
     }
+    if resource == "security" {
+        return security_rule_read(state, path, &parts, query, owner, request_id).await;
+    }
     if matches!(resource, "attention" | "notifications" | "quotas" | "diagnostics") {
         return operator_read(state, path, query, owner, request_id).await;
     }
@@ -236,7 +240,7 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
         ("capabilities", None, _) => json!({
             "api_version":"1","service_version":env!("CARGO_PKG_VERSION"),"heartbeat_interval_seconds":5,
             "availability_thresholds_seconds":{"degraded":30,"offline":90},"poll_interval_seconds":5,"hidden_poll_interval_seconds":30,
-            "implemented_read_routes":READ_ROUTES,"features":{"current_inventory":true,"physical_disks":true,"typed_storage_topology":true,"hardware_models":true,"historical_inventory":false,"events":true,"storage_activity_detection":true,"drive_reliability":true,"reliability_findings":true,"replacement_forecasts":false,"findings":true,"alerts":true,"twilio_notifications":true,"notification_configuration":"administrator_dashboard","nfs_user_quotas":true,"diagnostics_readiness":true,"capacity_forecasts":true,"sse":false,"metric_history":true,"prometheus":false,"openapi":false},
+            "implemented_read_routes":READ_ROUTES,"features":{"current_inventory":true,"physical_disks":true,"typed_storage_topology":true,"hardware_models":true,"historical_inventory":false,"events":true,"storage_activity_detection":true,"filesystem_nfs_rule_detection":true,"drive_reliability":true,"reliability_findings":true,"replacement_forecasts":false,"findings":true,"alerts":true,"twilio_notifications":true,"notification_configuration":"administrator_dashboard","nfs_user_quotas":true,"diagnostics_readiness":true,"capacity_forecasts":true,"sse":false,"metric_history":true,"prometheus":false,"openapi":false},
             "viewer_credential_expires_at":store::timestamp(state.app.viewer_expires_at),"viewer_scope":"telemetry:read","browser_transport":"same_origin",
             "limits":{"default_page_size":100,"maximum_page_size":500,"cursor_ttl_seconds":300,"read_requests_per_minute":120,"read_burst":20}
         }),
@@ -269,6 +273,36 @@ async fn dispatch(state: &ReadState, headers: &HeaderMap, uri: &Uri, request_id:
     };
     if !list { return Ok(response(data, snapshot.time, &snapshot.change, None, request_id, &metadata)); }
     list_response(state, path, query, owner, data, snapshot.time, snapshot.change, limit, request_id, metadata)
+}
+
+async fn security_rule_read(state: &ReadState, path: &str, parts: &[&str], mut query: Parameters,
+    owner: String, request_id: &str) -> ApiResult<Response> {
+    let sources = path == "/api/v1/security/rule-sources";
+    let finding_id = if parts.get(3) == Some(&"rule-findings") { parts.get(4).copied() } else { None };
+    let list = sources || (parts.len() == 4 && parts[3] == "rule-findings");
+    if !sources && !list && finding_id.is_none() { return Err(not_found()); }
+    if let Some(id)=finding_id { Uuid::parse_str(id).map_err(|_|query_error("finding_id","Expected a finding UUID"))?; }
+    let allowed:&[&str]=if sources { &["node_id","object_id","limit","cursor"] } else if list { &["node_id","object_id","status","limit","cursor"] } else { &[] };
+    for key in query.keys(){if !allowed.contains(&key.as_str()){return Err(query_error(key,"Unknown query parameter"));}}
+    for key in ["node_id","object_id"]{if let Some(id)=query.get(key){Uuid::parse_str(id).map_err(|_|query_error(key,"Expected a resource UUID"))?;}}
+    validate_enum(&query,"status",&["open","resolved","interrupted","all"])?;
+    let limit=match query.get("limit"){Some(n)=>n.parse::<usize>().ok().filter(|n|(1..=500).contains(n)).ok_or_else(||query_error("limit","Expected 1-500"))?,None=>100};
+    if let Some(cursor)=query.remove("cursor"){return page(state,path,&query,&owner,&cursor,limit,request_id);}
+    let mut tx=state.app.db.begin().await?;
+    let change:i64=sqlx::query_scalar("SELECT COALESCE(MAX(change_id),0) FROM change_log").fetch_one(&mut *tx).await?;
+    let now=Utc::now().timestamp_millis();
+    let values=if sources {
+        crate::security_rules::source_summaries(&mut tx,query.get("node_id").map(String::as_str),query.get("object_id").map(String::as_str)).await?
+    } else {
+        let status=query.get("status").map(String::as_str).unwrap_or("open");
+        let rows=sqlx::query("SELECT finding_json FROM security_rule_findings WHERE (? IS NULL OR finding_id=?) AND (? IS NOT NULL OR ?='all' OR status=?) AND (? IS NULL OR node_id=?) AND (? IS NULL OR object_id=?) ORDER BY updated_at DESC,finding_id DESC LIMIT 10001")
+            .bind(finding_id).bind(finding_id).bind(finding_id).bind(status).bind(status).bind(query.get("node_id")).bind(query.get("node_id")).bind(query.get("object_id")).bind(query.get("object_id")).fetch_all(&mut *tx).await?;
+        if rows.len()>10000{return Err(query_error("filters","Narrow the filters to at most 10000 findings"));}
+        rows.iter().map(|r|value(r,"finding_json")).collect::<ApiResult<Vec<_>>>()?
+    };
+    tx.commit().await?;
+    if list { list_response(state,path,query,owner,json!(values),now,change.to_string(),limit,request_id,json!({"policy_version":crate::security_rules::POLICY_VERSION})) }
+    else { Ok(response(values.into_iter().next().ok_or_else(not_found)?,now,&change.to_string(),None,request_id,&json!({}))) }
 }
 
 async fn change_cursor(app: &AppState) -> ApiResult<String> {

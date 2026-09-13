@@ -228,7 +228,7 @@ async fn missing_inventory_is_requested_and_committed_receipts_survive_reopen() 
     let result = request(&routes(&reopened), "POST", "/api/v2/ciderd/heartbeat", &h.credential, full).await;
     assert_eq!(result, (200, ack));
     let version: i64 = sqlx::query_scalar("PRAGMA user_version").fetch_one(&reopened.db).await.unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
 }
 
 #[tokio::test]

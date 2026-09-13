@@ -122,6 +122,8 @@ async fn detection_reads_use_existing_roles_envelopes_and_explicit_empty_coverag
     for path in [
         "/api/v1/findings",
         "/api/v1/detectors/storage-activity/sources",
+        "/api/v1/security/rule-findings",
+        "/api/v1/security/rule-sources",
     ] {
         let (status, body) = h.get(path).await;
         assert_eq!(status, 200, "{body}");

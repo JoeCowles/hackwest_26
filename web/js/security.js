@@ -5,6 +5,8 @@ import { CursorPages } from './session.js';
 export const SECURITY_COLLECTIONS = Object.freeze({
   findings: Object.freeze({ path: '/api/v1/findings', params: Object.freeze({ status: 'all' }) }),
   sources: Object.freeze({ path: '/api/v1/detectors/storage-activity/sources', params: Object.freeze({}) }),
+  ruleFindings: Object.freeze({ path: '/api/v1/security/rule-findings', params: Object.freeze({ status: 'all' }) }),
+  ruleSources: Object.freeze({ path: '/api/v1/security/rule-sources', params: Object.freeze({}) }),
   events: Object.freeze({ path: '/api/v1/events', params: Object.freeze({ category: 'security' }) })
 });
 
@@ -142,6 +144,32 @@ export function findingVM(value) {
   };
 }
 
+export function ruleFindingVM(value) {
+  const valid = record(value) && ['finding_id', 'source_id', 'node_id', 'object_id', 'resource_id', 'scope', 'rule_id', 'status', 'severity', 'summary', 'first_seen_at', 'last_seen_at', 'updated_at'].every(key => text(value[key]))
+    && ['open', 'resolved', 'interrupted'].includes(value.status)
+    && ['warning', 'critical'].includes(value.severity) && record(value.evidence) && record(value.evidence.features);
+  if (!valid) return { valid: false, reason: 'Finding row does not match the fixed-rule contract.' };
+  return {
+    valid: true, raw: value, findingId: value.finding_id, nodeId: value.node_id,
+    objectId: value.object_id, scope: words(value.scope), ruleId: value.rule_id,
+    status: value.status, severity: value.severity, summary: value.summary,
+    firstSeenLabel: timeLabel(value.first_seen_at), lastSeenLabel: timeLabel(value.last_seen_at),
+    updatedLabel: timeLabel(value.updated_at), endedLabel: timeLabel(value.ended_at),
+    features: value.evidence.features, requiredIntervals: finite(value.evidence.required_intervals),
+    recoveryIntervals: finite(value.evidence.recovery_intervals)
+  };
+}
+
+export function ruleSourceVM(value) {
+  const valid = record(value) && ['source_id', 'node_id', 'object_id', 'resource_id', 'collector', 'scope', 'policy_version'].every(key => text(value[key]))
+    && typeof value.active === 'boolean' && record(value.features) && Array.isArray(value.rules) && record(value.observation);
+  if (!valid) return { valid: false, reason: 'Source row does not match the fixed-rule contract.' };
+  return { valid: true, raw: value, sourceId: value.source_id, nodeId: value.node_id, objectId: value.object_id,
+    collector: value.collector, scope: words(value.scope), active: value.active, features: value.features,
+    rules: value.rules, observationState: text(value.observation.state) || 'unknown',
+    observedLabel: timeLabel(value.observation.observed_at) };
+}
+
 function validEvent(value) {
   return record(value) && text(value.event_id) && text(value.occurred_at)
     && text(value.severity) && text(value.source) && text(value.summary);
@@ -150,6 +178,7 @@ function validEvent(value) {
 export function securityPageVM(kind, snapshot = {}, now = performance.now(), wallNow = Date.now()) {
   const transform = kind === 'findings' ? findingVM : kind === 'sources'
     ? value => sourceVM(value, { startedAt: snapshot.startedAt, startedWallAt: snapshot.startedWallAt, now, wallNow })
+    : kind === 'ruleFindings' ? ruleFindingVM : kind === 'ruleSources' ? ruleSourceVM
     : value => validEvent(value) ? { valid: true, raw: value } : { valid: false };
   const transformed = (Array.isArray(snapshot.rows) ? snapshot.rows : []).map(transform);
   const invalidCount = transformed.filter(row => !row.valid).length;
@@ -157,7 +186,7 @@ export function securityPageVM(kind, snapshot = {}, now = performance.now(), wal
     ...snapshot,
     rows: transformed.filter(row => row.valid).map(row => kind === 'events' ? row.raw : row),
     invalidCount,
-    contractError: invalidCount ? `${invalidCount} invalid ${kind === 'sources' ? 'detector source' : kind.slice(0, -1)} row${invalidCount === 1 ? '' : 's'} omitted; the response did not match the documented contract.` : ''
+    contractError: invalidCount ? `${invalidCount} invalid ${kind.endsWith('Sources') || kind === 'sources' ? 'detector source' : 'finding'} row${invalidCount === 1 ? '' : 's'} omitted; the response did not match the documented contract.` : ''
   };
 }
 

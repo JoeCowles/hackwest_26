@@ -19,6 +19,7 @@ pub mod read_api;
 pub mod reliability;
 pub mod reliability_store;
 pub mod reliability_view;
+pub mod security_rules;
 pub mod store;
 pub mod workers;
 

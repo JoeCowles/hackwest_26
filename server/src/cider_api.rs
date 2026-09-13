@@ -220,6 +220,7 @@ async fn heartbeat(
                 // Every accepted attempt matters, even when no field could be projected.
                 crate::detection_store::observe_collection(&mut tx, &hb, resource, collection, now).await?;
                 crate::reliability_store::observe_collection(&mut tx, &hb, resource, collection, now).await?;
+                crate::security_rules::observe_collection(&mut tx, &hb, resource, collection, now).await?;
                 mark_projected(&mut tx, &node_id, "collection", &collection.collection_id).await?;
             }
         }

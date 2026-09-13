@@ -355,13 +355,16 @@ test('findings, detector sources and collector events use independent frozen rea
   const pages = new SecurityPages('viewer_test', state => updates.push(state), () => {}, clientFactory);
   const loading = pages.refreshAll();
   assert.deepEqual(requested.map(([path]) => path).sort(), [
-    '/api/v1/detectors/storage-activity/sources', '/api/v1/events', '/api/v1/findings'
+    '/api/v1/detectors/storage-activity/sources', '/api/v1/events', '/api/v1/findings',
+    '/api/v1/security/rule-findings', '/api/v1/security/rule-sources'
   ]);
   pending.get('/api/v1/findings').resolve(page([finding()]));
   await Promise.resolve(); await Promise.resolve();
   assert.equal(pages.snapshot().findings.rows.length, 1);
   assert.equal(pages.snapshot().sources.busy, true);
   assert.equal(pages.snapshot().events.busy, true);
+  pending.get('/api/v1/security/rule-findings').resolve(page([]));
+  pending.get('/api/v1/security/rule-sources').resolve(page([]));
   pending.get('/api/v1/detectors/storage-activity/sources').reject(new Error('Detector status unavailable'));
   pending.get('/api/v1/events').resolve(page([{ event_id: 'event-1', category: 'security' }]));
   await loading;
@@ -384,6 +387,8 @@ test('closing Security pages ignores every late response from the obsolete viewe
   assert.deepEqual(pages.snapshot().findings.rows, []);
   assert.deepEqual(pages.snapshot().sources.rows, []);
   assert.deepEqual(pages.snapshot().events.rows, []);
+  assert.deepEqual(pages.snapshot().ruleFindings.rows, []);
+  assert.deepEqual(pages.snapshot().ruleSources.rows, []);
 });
 
 test('the Security view distinguishes generated findings from collector events and stays read-only', () => {
@@ -418,6 +423,8 @@ test('security collection contracts do not repurpose collector events as finding
   assert.deepEqual(SECURITY_COLLECTIONS, {
     findings: { path: '/api/v1/findings', params: { status: 'all' } },
     sources: { path: '/api/v1/detectors/storage-activity/sources', params: {} },
+    ruleFindings: { path: '/api/v1/security/rule-findings', params: { status: 'all' } },
+    ruleSources: { path: '/api/v1/security/rule-sources', params: {} },
     events: { path: '/api/v1/events', params: { category: 'security' } }
   });
 });

@@ -1,7 +1,7 @@
 import { html } from './lib.js';
 import { statusColor } from './data.js';
 import { timeLabel } from './model.js';
-import { findingVM, securityPageVM, sourceVM } from './security.js';
+import { findingVM, ruleFindingVM, securityPageVM, sourceVM } from './security.js';
 import { PageControls } from './views.js';
 
 const Panel = ({ title, note, children }) => html`<section class="panel security-panel"><div class="panel-head"><h3>${title}</h3>${note ? html`<span class="note">${note}</span>` : null}</div><div class="panel-pad">${children}</div></section>`;
@@ -108,7 +108,38 @@ const CollectorEvents = ({ paging = {}, nodes }) => {
   <//>`;
 };
 
+const FeatureList = ({ features = {} }) => html`<dl class="security-details">${Object.entries(features).map(([key, value]) => html`<div key=${key}><dt>${policyName(key)}</dt><dd>${typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(value)}</dd></div>`)}</dl>`;
+
+const RuleFindings = ({ paging = {}, nodes }) => {
+  const page = securityPageVM('ruleFindings', paging);
+  return html`<${Panel} title="Filesystem and NFS rule findings" note="Fixed thresholds · server evaluated">
+    <p>These findings use explicit operation-rate, throughput, mount-health, and snapshot rules. They identify behavior that needs review; they do not prove malicious intent.</p>
+    <${PageState} kind="ruleFindings" paging=${paging}/>
+    ${page.rows.length ? html`<div class="security-findings">${page.rows.map(row => {
+      const vm = row.valid === true ? row : ruleFindingVM(row);
+      return html`<article class=${`security-finding finding-${vm.status}`} key=${vm.findingId}>
+        <header><div><div class="eyebrow-accent">${vm.scope} · ${vm.ruleId}</div><h4>${vm.summary}</h4></div><${Tag} state=${vm.status === 'open' ? vm.severity : vm.status}/></header>
+        <p class="security-links"><a href=${nodeLink(vm.nodeId)}>${nodeName(nodes, vm.nodeId)}</a><span><a href=${nodeLink(vm.nodeId, vm.objectId)}><code>${vm.objectId}</code></a></span></p>
+        <dl class="security-details"><div><dt>First / latest evidence</dt><dd>${vm.firstSeenLabel} / ${vm.lastSeenLabel}</dd></div><div><dt>Updated</dt><dd>${vm.updatedLabel}</dd></div><div><dt>Rule timing</dt><dd>${vm.requiredIntervals ?? 'unknown'} qualifying intervals · ${vm.recoveryIntervals ?? 'unknown'} recovery intervals</dd></div></dl>
+        <details><summary>Normalized feature evidence</summary><${FeatureList} features=${vm.features}/></details>
+      </article>`;
+    })}</div>` : html`<${Empty}>${paging.busy ? 'Loading rule findings…' : paging.error ? 'Rule findings are unavailable.' : 'No fixed-rule filesystem or NFS findings have been generated.'}<//>`}
+  <//>`;
+};
+
+const RuleSources = ({ paging = {}, nodes }) => {
+  const page = securityPageVM('ruleSources', paging);
+  return html`<${Panel} title="Rule inputs" note="Model-ready feature snapshots">
+    <p>Latest normalized server-side inputs are retained here so operators can audit each decision and later models can consume the same feature names.</p>
+    <${PageState} kind="ruleSources" paging=${paging}/>
+    ${page.rows.length ? html`<div class="table-scroll"><table class="live-table"><thead><tr><th>Source</th><th>Observation</th><th>Rule state</th><th>Latest features</th></tr></thead><tbody>${page.rows.map(vm => html`<tr key=${vm.sourceId}><td><a href=${nodeLink(vm.nodeId)}>${nodeName(nodes, vm.nodeId)}</a><div class="note">${vm.scope} · ${vm.collector}</div></td><td><${Tag} state=${vm.observationState}/><div class="note">${vm.observedLabel}</div></td><td>${vm.rules.filter(rule => rule.state === 'open').length ? `${vm.rules.filter(rule => rule.state === 'open').length} open` : 'Quiet'}<div class="note">${vm.rules.length} rules evaluated</div></td><td><${FeatureList} features=${vm.features}/></td></tr>`)}</tbody></table></div>`
+      : html`<${Empty}>${paging.busy ? 'Waiting for rule inputs…' : paging.error ? 'Rule inputs are unavailable.' : 'No compatible filesystem or NFS telemetry has arrived yet.'}<//>`}
+  <//>`;
+};
+
 export const SecurityView = ({ security = {}, nodes = [], now = performance.now(), wallNow = Date.now() }) => html`<div class="stack security-view">
+  <${RuleFindings} paging=${security.ruleFindings || { rows: [], busy: true }} nodes=${nodes}/>
+  <${RuleSources} paging=${security.ruleSources || { rows: [], busy: true }} nodes=${nodes}/>
   <${Panel} title="Storage activity detection" note="Read-only viewer">
     <p>Orchard compares each admitted native driver's read and write rates with that same source's learned history. Findings preserve the threshold, counter intervals, dates, and coverage used at detection time.</p>
     <p class="note">This first rule observes sustained upper-rate deviations. It does not identify file access, application throughput, or a physical disk association, and it does not establish that quieter activity is safe. Administrator relearning is intentionally outside this viewer.</p>
