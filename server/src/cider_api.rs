@@ -209,6 +209,7 @@ async fn heartbeat(
     crate::reliability_store::reconcile_sources(&mut tx, &node_id, &hb.boot_id,
         &hb.agent_generation.to_string(), &hb.agent_session_id, &receiver.graph.resources, now).await?;
     let mut stored_samples = 0usize;
+    let mut watch_attempts = std::collections::BTreeSet::new();
     let mut collections: Vec<&Collection> = hb.collections.iter().collect();
     collections.sort_by_key(|c| c.finished_monotonic_ns);
     for collection in collections {
@@ -231,6 +232,7 @@ async fn heartbeat(
                 crate::detection_store::observe_collection(&mut tx, &hb, resource, collection, now).await?;
                 crate::reliability_store::observe_collection(&mut tx, &hb, resource, collection, now).await?;
                 crate::security_rules::observe_collection(&mut tx, &hb, resource, collection, now).await?;
+                watch_attempts.insert(collection.collection_id.clone());
                 mark_projected(&mut tx, &node_id, "collection", &collection.collection_id).await?;
             }
         }
@@ -265,6 +267,7 @@ async fn heartbeat(
     sqlx::query("UPDATE nodes SET agent_json=?,last_seen_at=?,goodbye_at=NULL,boot_id=?,boot_observed_at=?,inventory_generation=? WHERE node_id=?")
         .bind(serde_json::to_string(&hb.agent).expect("wire agent")).bind(now).bind(&hb.boot_id).bind(now)
         .bind(receiver.projection_generation).bind(&node_id).execute(&mut *tx).await?;
+    crate::device_watch::ingest(&mut tx,&hb,&receiver.graph.resources,graph_known,&watch_attempts,now).await?;
     let change_id = store::change(&mut tx, "telemetry", Some(&node_id),
         json!({"protocol":"ciderd/2.0","sequence":hb.sequence,"stored_samples":stored_samples,"stored_events":stored_events})).await?;
     sqlx::query("INSERT INTO batches(node_id,boot_id,sequence,fingerprint,raw_json,received_at,sample_count,event_count,change_id) VALUES (?,?,?,?,?,?,?,?,?)")

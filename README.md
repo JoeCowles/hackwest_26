@@ -7,6 +7,8 @@ Orchard helps an administrator review storage concerns and their evidence. The
 console includes live throughput and capacity, drive reliability observations,
 activity deviations, an attention queue, configurable Twilio SMS, stored metric
 history, capacity exhaustion scenarios, NFS user quotas, and diagnostic readiness.
+USB connection watches cover confirmed disappearance and a negotiated link below
+the same enclosure's previously confirmed speed.
 Missing evidence stays unknown. Orchard observes and notifies; the administrator
 decides how to respond.
 
@@ -27,8 +29,8 @@ The [Server Spec](https://docs.google.com/document/d/1JnsZHlYPXQ1IRsMSEHeboICzqq
 defines the receiver API. Section 15 documents v1 ingestion, section 16 the live
 read API, and section 17 the ciderd compatibility endpoint. Planned monitoring
 features are not implied to be implemented by their appearance in section 14.
-Sections 20–21 document storage activity and reliability. The new operator API
-contract is being added as section 22. Prior sections 20–21 were saved through
+Sections 20–21 document storage activity and reliability, section 22 operator
+workflows, and section 23 USB connection watches. Section 23 was saved through
 native Google Docs and verified by export comparison.
 The exact collector models, catalog, and JSON schemas live in
 `crates/ciderd/contract/` and `crates/ciderd/src/model.rs`.
@@ -61,6 +63,25 @@ workload-qualified service-time assessment, authenticated read APIs, and the dis
 view. SMART remains opt-in; missing evidence and replacement dates remain unknown.
 See [the reliability runbook and API contract](docs/drive-reliability.md). Shared
 Server Spec section 21 is saved and export-verified through native Google Docs.
+
+## USB connection showcases
+
+The collector, durable watch policy, disk read projection and UI are implemented.
+Source checks and authenticated synthetic transition tests pass. A local physical
+unplug, 5 Gb/s-to-480 Mb/s downshift, and return-to-5 Gb/s rehearsal passed on one
+enclosure. Real handset delivery remains unverified.
+
+The collector publishes passive USB presence and negotiated-speed observations
+every five seconds. Two complete fresh absences of an armed connection open an
+Attention concern; two slower-link observations against a confirmed baseline
+open a separate connection-speed concern. Both use the existing optional SMS
+outbox. Unknown, partial and stale observations do not prove loss or recovery.
+
+The new **Presence and USB connection** panel presents readiness, identity
+scope and exact bitrates. Replug comparisons require a stable reported enclosure
+identity and a prior faster baseline. These observations describe the transport
+connection; media health and future failure remain unknown from this evidence.
+See [the USB demo runbook](docs/usb-demo-alerts.md) for rehearsal and verification.
 
 ## Run the server
 
@@ -125,7 +146,7 @@ an authoritative shared filesystem identity is supplied.
 Do not send legacy v1 inventory/telemetry and schema-2 heartbeats using the same
 node identity. Existing v1 clients keep their original endpoints and contract.
 The SQLite migration adds schema-2 receiver state and raises the schema version
-to 5, including detection, reliability, attention and notification state; an older
+to 6, including detection, reliability, attention, notification and USB watch state; an older
 server refuses this newer database. Back up state before running
 a newly built server against an existing installation.
 
@@ -173,10 +194,11 @@ existing third-party code, fonts and assets retain their own notices.
 
 ## Integration status
 
-The new operator workflows are undergoing final workspace and rendered-browser
-verification. The final evidence and remaining deployment boundaries are recorded
-in the operator API contract. Real SMS delivery has not been exercised. No
-packaged/signed application or production installation is implied by source checks.
+The current build passes 345 Rust tests, 128 web tests, workspace/default and
+headless checks, and verified-TLS integration. USB physical rehearsal and software
+evidence are recorded in the [USB runbook](docs/usb-demo-alerts.md). Real SMS
+delivery has not been exercised. No packaged/signed application or production
+installation is implied by these checks.
 
 To repeat source validation on macOS:
 

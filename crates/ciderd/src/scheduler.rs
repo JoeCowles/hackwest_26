@@ -674,6 +674,7 @@ pub(crate) fn apply(state: &mut State, mut update: CompletedJob) {
                     .take(256)
                     .collect();
             collection.exit_code = sample.exit_code.or(update.exit_code);
+            collection.extensions = sample.extensions;
             let generation = if sample.resource_id == update.job.resource {
                 update.job.generation.clone()
             } else {
@@ -808,6 +809,53 @@ fn collection(update: &CompletedJob, resource: &str, collector: &str) -> Collect
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usb_host_snapshot_is_acquisition_scoped_and_survives_empty_enumeration() {
+        let clock = Clock::new("session");
+        let mut state = State::new(
+            crate::runtime::initial_heartbeat(
+                "node", 1, "session", "boot", "test", "test", "test", 5,
+            ),
+            256,
+        );
+        let mut ids = Vec::new();
+        for complete in [true, false, true] {
+            let source: plist::Value = serde_json::from_value(serde_json::json!({
+                "version":2,"usb_complete":complete,"drivers":[]}))
+            .unwrap();
+            let mut bytes = Vec::new();
+            plist::to_writer_binary(&mut bytes, &source).unwrap();
+            let mut update = mount_update(BOOT_MOUNTS, &clock);
+            update.job.kind = Kind::Iokit;
+            update.job.collector = "iokit.block".into();
+            update.job.interval = 5;
+            update.collected = Some(collectors::parse_iokit(&bytes, "node", "boot").unwrap());
+            apply(&mut state, update);
+            let mut snapshot = state.snapshot();
+            let (clock_id, monotonic_ns) = clock.read();
+            snapshot.clock_id = clock_id;
+            snapshot.monotonic_ns = monotonic_ns.into();
+            snapshot.validate().unwrap();
+            let host = snapshot
+                .collections
+                .iter()
+                .find(|c| c.resource_id == "node/host" && c.collector == "iokit.block")
+                .unwrap();
+            assert_eq!(host.status, "ok");
+            let evidence = &host
+                .extensions
+                .as_ref()
+                .expect("USB snapshot must survive state publication")["usb_device_snapshot"];
+            assert_eq!(evidence["complete"], complete);
+            assert_eq!(evidence["devices"], serde_json::json!([]));
+            assert!(
+                !ids.contains(&host.collection_id),
+                "distinct acquisitions cannot reuse collection identity"
+            );
+            ids.push(host.collection_id.clone());
+        }
+    }
 
     fn mount_update(bytes: &[u8], clock: &Clock) -> CompletedJob {
         let stamp = clock.start();

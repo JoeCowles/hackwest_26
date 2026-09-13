@@ -75,6 +75,50 @@ export function diskRateMeasurement(measurement,snapshotAgeMs=0) {
   return expired ? {...measurement,state:'stale'} : measurement;
 }
 
+const watchWords = value => typeof value==='string' && value ? value.replaceAll('_',' ') : 'unknown';
+function bitrate(value) {
+  if(typeof value!=='string' || !/^[1-9]\d{0,38}$/.test(value))return {label:'Unknown',exact:null};
+  const units=['bit/s','kb/s','Mb/s','Gb/s','Tb/s','Pb/s','Eb/s'];
+  let scaled=Number(value),unit=0;
+  while(scaled>=1000 && unit<units.length-1){scaled/=1000;unit++;}
+  return {label:`${scaled.toLocaleString('en-US',{maximumFractionDigits:2})} ${units[unit]}`,exact:`${value} bit/s`};
+}
+
+/** USB presence and negotiated speed have their own source freshness. Current
+ * means the containing snapshot/owner is usable, never that disk I/O is linked.
+ * Preserve exact source values and states as dated evidence when claims expire.
+ */
+export function deviceWatchVM(value,{snapshotAgeMs=0,current=false}={}) {
+  const available=!!value && typeof value==='object' && !Array.isArray(value);
+  const raw=available ? value : {},observation=raw.observation || {};
+  const sourceAge=observation.age_seconds,limit=observation.stale_after_seconds;
+  const hasAge=Number.isFinite(sourceAge) && sourceAge>=0 && Number.isFinite(limit) && limit>0;
+  const elapsed=Number.isFinite(snapshotAgeMs) && snapshotAgeMs>=0 ? snapshotAgeMs/1000 : null;
+  const age=hasAge && elapsed!=null ? sourceAge+elapsed : null;
+  let state=available && ['current','stale','unavailable','unknown'].includes(observation.state) ? observation.state : available ? 'unknown' : 'unavailable';
+  if(state==='current')state=!current || elapsed==null || snapshotAgeMs>=15000 ? 'stale' : !hasAge ? 'unknown' : age>limit ? 'stale' : 'current';
+  const fresh=state==='current';
+  const presence=['present','absent','unknown'].includes(raw.presence) ? raw.presence : 'unknown';
+  const link=['warming_up','no_current_warning','warning','unknown','unsupported'].includes(raw.link_state) ? raw.link_state : 'unknown';
+  const links={warming_up:'Warming up',no_current_warning:'No current link warning',warning:'Link below previously confirmed speed',unknown:'Unknown',unsupported:'Unsupported'};
+  const weak=raw.identity_basis==='boot_registry' || raw.identity_scope==='driver_incarnation';
+  return {
+    available,raw,state,stateLabel:state[0].toUpperCase()+state.slice(1),fresh,
+    presenceLabel:fresh ? presence[0].toUpperCase()+presence.slice(1) : 'Unknown',
+    linkLabel:fresh ? links[link] : 'Unknown',
+    snapshotLabel:`At source observation: presence ${presence}; link ${watchWords(link)}.`,
+    readiness:raw.armed===true ? 'Armed' : raw.armed===false ? 'Warming up · waiting for two distinct presence observations' : 'Unknown',
+    baselineReadiness:link==='warming_up' && !bitrate(raw.baseline_bps).exact ? 'Waiting for two matching speed observations to confirm a baseline.' : null,
+    negotiated:bitrate(raw.negotiated_bps),baseline:bitrate(raw.baseline_bps),
+    scope:raw.identity_scope==='usb_enclosure' ? 'USB enclosure' : raw.identity_scope==='driver_incarnation' ? 'Driver incarnation' : 'Unknown',
+    basis:raw.identity_basis==='reported_usb_serial' ? 'reported USB serial' : raw.identity_basis==='boot_registry' ? 'boot and registry identity' : 'unknown',
+    identityNote:weak ? 'This identity cannot compare connection speeds across reconnects or establish recovery through a new registry identity.' : raw.identity_scope==='usb_enclosure' ? 'Reported identity follows the USB enclosure; it does not verify the installed media.' : 'Identity continuity is unavailable.',
+    ageLabel:age==null ? 'Source age unknown' : `${Math.round(age)} ${Math.round(age)===1?'second':'seconds'} old; stale after ${limit} ${limit===1?'second':'seconds'}`,
+    observedAt:observation.observed_at,receivedAt:observation.received_at,
+    reason:raw.reason ? watchWords(raw.reason) : null
+  };
+}
+
 /** Append a selected-disk browser-session sample using server rates only.
  * sample={disk,at,error?,timely?,snapshotAgeMs?}; at uses performance.timeOrigin+performance.now.
  * Continuity includes boot, inventory and server's opaque source/association key.

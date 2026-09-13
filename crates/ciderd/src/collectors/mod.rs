@@ -10,10 +10,10 @@ pub use nfs::{parse_nfs, parse_nfs_status};
 pub use smart::{parse_smart, parse_smart_with_locator};
 
 use crate::model::{Attributes, Metric, Relationship, Resource};
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{
-    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer,
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::Value;
 use std::{collections::BTreeSet, fmt};
@@ -30,6 +30,7 @@ pub struct Sample {
     pub status: String,
     pub source_version: String,
     pub exit_code: Option<u8>,
+    pub extensions: Option<Attributes>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Collected {
@@ -60,6 +61,7 @@ impl Collected {
             status: status.into(),
             source_version: version.into(),
             exit_code: None,
+            extensions: None,
         });
     }
     fn resource(&mut self, resource: Resource) -> Result<()> {

@@ -73,6 +73,7 @@ records and 16 MiB, with a 256 KiB per-collection limit. Metadata is capped at
 | APFS containers/volumes | `diskutil apfs list -plist`; separate container/volume accounting |
 | APFS snapshots | Per-volume `diskutil apfs listSnapshots -plist`; count and inventory |
 | Local block I/O | Native IOKit driver records, registry IDs, exact cumulative counters |
+| USB connection evidence | Bounded nearest-device ancestry, opaque enclosure/incarnation identity, reported negotiated bitrate, explicit enumeration completeness |
 | Cached mounts | Caller-owned `getfsstat(MNT_NOWAIT)` records without pathname queries |
 | Fresh capacity | Isolated `statfs` worker, verifies expected fsid before accepting data |
 | NFS client | Versioned `nfsstat -f JSON -c` tables, host-client scope |
@@ -83,6 +84,18 @@ Cached capacity accompanies the `mount.inventory` collection that acquired it;
 fresh capacity uses `filesystem.capacity`. This provenance distinction prevents
 cached enumeration from overwriting a fresh worker's running/timeout state.
 Both retain the supplied catalog's filesystem metric names and units.
+
+The host `iokit.block` collection also carries a version-1
+`extensions.usb_device_snapshot`, including complete empty enumerations. It uses
+the same five-second acquisition cadence and original collection timestamps as
+the native worker. `src/device_snapshot.rs` defines its bounded pure types; the
+server shares those types without linking collection code. USB failures preserve
+usable I/O counters and cannot certify absence. Raw USB serial properties stay
+inside the private acquisition/parser boundary; the heartbeat contains an opaque
+node-scoped identity. The identity follows a reported enclosure, not verified
+installed media. Missing serials use a boot/registry identity with no comparison
+across reconnects. Negotiated bitrates describe the USB transport, not observed
+read/write throughput or media health. See [the USB demo runbook](../../docs/usb-demo-alerts.md).
 
 The native boundary is in `src/platform/`; its small C shim compiles against the
 selected Apple SDK rather than duplicating Apple struct layouts. Other hosts can

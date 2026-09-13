@@ -166,7 +166,7 @@ async fn migration_and_native_ingestion_admit_both_directions() {
         .await
         .unwrap();
     assert_eq!(
-        version, 6,
+        version, 7,
         "Native detector state must be migrated atomically at startup"
     );
     let rows = sqlx::query(
@@ -633,7 +633,7 @@ async fn migration_from_schema_two_preserves_preexisting_data() {
         .fetch_one(&reopened.db)
         .await
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     let value: String = sqlx::query_scalar("SELECT token_hash FROM enrollment_tokens")
         .fetch_one(&reopened.db)
         .await

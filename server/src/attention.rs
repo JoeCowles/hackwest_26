@@ -521,6 +521,10 @@ pub async fn reconcile(state: &AppState, now: i64) -> ApiResult<()> {
         observed.insert(c.key.clone());
         observe_condition(&mut tx, &c, now).await?;
     }
+    for c in crate::device_watch::conditions(&mut tx,now).await? {
+        observed.insert(c.key.clone());
+        observe_condition(&mut tx,&c,now).await?;
+    }
     // Drive removals are committed events, not gauges that become unknown when absent.
     for row in sqlx::query("SELECT id,source_key FROM attention_episodes WHERE status='open' AND kind!='drive_removal' AND observation_state!='unknown'").fetch_all(&mut *tx).await? {
         if !observed.contains(&row.get::<String,_>("source_key")) {

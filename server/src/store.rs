@@ -67,7 +67,7 @@ impl AppState {
             .fetch_one(&db)
             .await?;
         anyhow::ensure!(
-            version <= 6,
+            version <= 7,
             "Database schema is newer than this application"
         );
         let mut migration = db.begin().await?;
@@ -93,6 +93,10 @@ impl AppState {
         }
         if version < 6 {
             sqlx::raw_sql(include_str!("../migrations/006_security_rules.sql"))
+                .execute(&mut *migration).await?;
+        }
+        if version < 7 {
+            sqlx::raw_sql(include_str!("../migrations/007_device_watch.sql"))
                 .execute(&mut *migration).await?;
         }
         migration.commit().await?;

@@ -891,6 +891,8 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
     let native:BTreeMap<String,Value>=native_rows.iter().map(|r|(r.get("node_id"),json!({"agent_generation":r.get::<String,_>("agent_generation"),"agent_session_id":r.get::<String,_>("agent_session_id")}))).collect();
     let detection_sources = crate::detection_store::current_warning_summaries(&mut tx, now).await?;
     let reliability_sources = crate::reliability_store::active_summaries(&mut tx, now).await?;
+    let device_watches = crate::device_watch::summaries(&mut tx,now).await?;
+    let device_watch_nodes = crate::device_watch::node_summaries(&mut tx,now).await?;
     let reliability_findings:Vec<Value> = reliability_sources.iter().flat_map(|s|s["findings"].as_array().into_iter().flatten().cloned()).collect();
     let mut detection_by_node: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut detection_by_object: BTreeMap<String, Vec<Value>> = BTreeMap::new();
@@ -946,6 +948,7 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
             "inventory_updated_at":inventory_times.iter().find(|r|r.get::<String,_>("node_id")==id).map(|r|store::timestamp(r.get("updated"))),
             "inventory_url":format!("/api/v1/nodes/{id}/inventory")});
         node["boot_id"]=json!(row.get::<Option<String>,_>("boot_id"));
+        node["device_watch"]=device_watch_nodes.get(&id).cloned().unwrap_or_else(crate::device_watch::unknown_node);
         node["agent_generation"]=native.get(&id).map(|v|v["agent_generation"].clone()).unwrap_or(Value::Null);
         node["agent_session_id"]=native.get(&id).map(|v|v["agent_session_id"].clone()).unwrap_or(Value::Null);
         node["hardware"]=crate::hardware::hardware_view(&root.map(|o|o["properties"].clone()).unwrap_or(Value::Null), &root.map(|o|o["properties"]["ciderd_acquisition"].clone()).unwrap_or(Value::Null), node["boot_id"].as_str());
@@ -985,6 +988,7 @@ async fn snapshot(app: &AppState, include_events: bool, query: &Parameters) -> A
         let mut index=crate::disk_view::build_disk_index(&input,&objects.iter().filter(|o|o["node_id"]==node["node_id"]).cloned().collect::<Vec<_>>());
         for disk in &mut index.disks {
             disk["reliability"]=crate::reliability_view::disk_assessment(node,disk,&index.objects,&reliability_sources,&reliability_findings);
+            disk["device_watch"]=crate::device_watch::disk_projection(node,disk,&index.objects,&device_watches);
             disk["diagnostics"]=crate::diagnostics::disk(node,disk["object_id"].as_str().unwrap_or(""),&index.objects,now);
             current_reliability.extend(disk["reliability"]["findings"].as_array().into_iter().flatten().filter(|f|f["current"]==true).cloned());
         }

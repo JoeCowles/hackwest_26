@@ -1,5 +1,5 @@
 import { html } from './lib.js';
-import { storageVM, diskRateMeasurement } from './storage.js';
+import { storageVM, diskRateMeasurement, deviceWatchVM } from './storage.js';
 import { topologyStamp } from './session.js';
 import { measured, bytes, metricLabel, rateLabel, timeLabel, inventoryLabel, inventoryProperties, coverageLabel, chartPath, chartPoints, chartScale } from './model.js';
 import { ReliabilityPanel } from './reliability-views.js';
@@ -38,11 +38,33 @@ const StorageEntry = ({entry,nodeId,selectedDiskId,depth=0}) => html`<div class=
   <${ObjectCapacity} entry=${entry}/><${RawStorageObject} object=${entry.object}/>
   ${entry.children.length ? html`<div class=${depth<5?'storage-children':'storage-children storage-flat'}>${entry.children.map(child=>html`<${StorageEntry} key=${child.objectId} entry=${child} nodeId=${nodeId} selectedDiskId=${selectedDiskId} depth=${depth+1}/>` )}</div>` : null}
 </div>`;
+const Bitrate = ({value}) => html`<span>${value.label}${value.exact ? html`<br/><span class="note">${value.exact}</span>` : null}</span>`;
+const DeviceWatch = ({value,current,snapshotAgeMs}) => {
+  const vm=deviceWatchVM(value,{current,snapshotAgeMs});
+  return html`<section class="device-watch">
+    <header><h4>Presence and USB connection</h4><span class="note">${vm.stateLabel} · ${vm.ageLabel}</span></header>
+    ${!vm.available ? html`<p class="note">USB connection observations are unavailable for this disk. No attributable watch was reported.</p>` : null}
+    <dl class="inventory-properties">
+      <div><dt>Presence</dt><dd>${vm.presenceLabel}</dd></div>
+      <div><dt>Connection assessment</dt><dd>${vm.linkLabel}</dd></div>
+      <div><dt>Negotiated link${vm.fresh?'':' at source observation'}</dt><dd><${Bitrate} value=${vm.negotiated}/></dd></div>
+      <div><dt>Previously confirmed link</dt><dd><${Bitrate} value=${vm.baseline}/></dd></div>
+      <div><dt>Presence watch readiness at source observation</dt><dd>${vm.readiness}</dd></div>
+      <div><dt>Identity scope / basis</dt><dd>${vm.scope} · ${vm.basis}</dd></div>
+    </dl>
+    ${vm.baselineReadiness ? html`<p class="note">${vm.baselineReadiness}</p>` : null}
+    ${vm.available ? html`<p class="note">${!vm.fresh?vm.snapshotLabel:''} ${vm.reason || ''}<br/>Observed ${timeLabel(vm.observedAt)} · received ${timeLabel(vm.receivedAt)}.</p>` : null}
+    <p class="note">${vm.identityNote} Connection observations describe transport; media health remains unknown from this evidence.</p>
+    <p><a href="#ops/attention">Review recorded connection concerns in Attention</a></p>
+    ${vm.available ? html`<details><summary>USB watch evidence</summary><pre class="storage-json">${JSON.stringify(vm.raw,null,2)}</pre></details>` : null}
+  </section>`;
+};
 /** Selected physical DiskSummary and browser history; current=false hides rates
  * without deleting dated topology, exact raw observations or the selected key. */
 export function DiskMetricsPanel({disk,history=[],current=false,nodeId,diskId,complete=false,snapshotAgeMs=0}) {
-  if(!disk)return html`<${Panel} title="Selected disk"><p role="status">${complete ? 'This disk was removed or is unavailable in the current physical inventory.' : 'This disk is not yet available. Waiting for a complete matching inventory.'}</p><p class="note">${diskId}</p><a href=${`#node/${encodeURIComponent(nodeId)}`}>Back to host storage</a><//>`;
-  current=current && disk.active!==false && disk.availability==='online' && disk.io?.linkage_state==='resolved';
+  if(!disk)return html`<${Panel} title="Selected disk"><p role="status">${complete ? 'This disk was removed or is unavailable in the current physical inventory.' : 'This disk is not yet available. Waiting for a complete matching inventory.'}</p><p class="note">${diskId}</p><p><a href="#ops/attention">Review recorded connection concerns in Attention</a>. Any recorded episode retains its evidence after a disk leaves the active inventory.</p><a href=${`#node/${encodeURIComponent(nodeId)}`}>Back to host storage</a><//>`;
+  const watchCurrent=current && disk.active!==false && disk.availability==='online';
+  current=watchCurrent && disk.io?.linkage_state==='resolved';
   const scale=chartScale(history),values=history.some(p=>Number.isFinite(p.read)||Number.isFinite(p.write));
   return html`<${Panel} title=${`Disk · ${disk.label || disk.bsd_name || disk.object_id}`}>
     <p class="note">${disk.object_id} · ${disk.active===false?'removed':disk.availability || 'unknown'} · I/O linkage ${disk.io?.linkage_state || 'unknown'}. ${current ? 'Confirmed driver source; each rate also honors its source age.' : 'Current rates Unknown while storage snapshots are unavailable, stale or unmatched.'}</p>
@@ -50,6 +72,7 @@ export function DiskMetricsPanel({disk,history=[],current=false,nodeId,diskId,co
     <p class="note">Physical hardware size: ${bytes(measured(disk.hardware_size_bytes))}. Capacity attribution: ${disk.capacity?.attribution || 'unresolved'}${disk.capacity?.attribution==='exclusive'?`; exclusive used ${bytes(measured(disk.capacity.used_bytes))} / total ${bytes(measured(disk.capacity.capacity_bytes))}`:''}. Shared pool capacity appears once in the shared-pool section.</p>
     ${values ? html`<div class="chart-plot"><div class="chart-y-axis note"><span>${scale.maxLabel}</span><span>0 B/s</span></div><div class="chart-body"><svg class="disk-chart" viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label=${`Disk rates, 0 to ${scale.maxLabel}; ${timeLabel(scale.start)} to ${timeLabel(scale.end)}`}><path d=${chartPath(history,'read')} fill="none" stroke="#5980a6" stroke-width="2"/><path d=${chartPath(history,'write')} fill="none" stroke="#888b90" stroke-width="2"/>${['read','write'].map(direction=>chartPoints(history,direction).map(p=>html`<circle cx=${p.x} cy=${p.y} r="2.5" fill=${direction==='read'?'#5980a6':'#888b90'}/>`))}</svg><div class="chart-x-axis note"><span>${timeLabel(scale.start)}</span><span>${timeLabel(scale.end)}</span></div></div></div>` : html`<p class="empty-note">Waiting for a new available disk-rate observation. Unknown is never plotted as zero.</p>`}
     <p class="note">Blue: read. Gray: write. SI bytes per second; browser arrival times. Up to 180 session observations; retained source samples are not counted again. Gaps show unavailable data and identity, boot or source changes.</p>
+    <${DeviceWatch} value=${disk.device_watch} snapshotAgeMs=${snapshotAgeMs} current=${watchCurrent}/>
     <${ReliabilityPanel} reliability=${disk.reliability} snapshotAgeMs=${snapshotAgeMs} current=${current}/>
     <details><summary>Disk summary and source provenance</summary><pre class="storage-json">${JSON.stringify(disk,null,2)}</pre></details>
   <//>`;

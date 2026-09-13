@@ -3,6 +3,7 @@
 #include <IOKit/IOKitLib.h>
 #include <DiskArbitration/DiskArbitration.h>
 #include <IOKit/storage/IOBlockStorageDriver.h>
+#include <IOKit/usb/IOUSBHostFamilyDefinitions.h>
 #include <sys/mount.h>
 #include <sys/sysctl.h>
 #include <stdint.h>
@@ -15,6 +16,7 @@
 
 #define OUTPUT_LIMIT (4U * 1024U * 1024U)
 #define RECORD_LIMIT 4096
+#define USB_ANCESTOR_DEPTH 32
 
 /* libc intentionally keeps fsid_t's members private in Rust. Read them using
  * the SDK field names rather than guessing a Rust representation. */
@@ -31,7 +33,7 @@ static void put_uint(CFMutableDictionaryRef dict, CFStringRef key, uint64_t n) {
 }
 
 /* Inspect only each driver's direct IOService children and their own properties. */
-static void direct_media(io_registry_entry_t driver, CFMutableDictionaryRef row, unsigned *records) {
+static bool direct_media(io_registry_entry_t driver, CFMutableDictionaryRef row, unsigned *records) {
     io_iterator_t children = IO_OBJECT_NULL;
     CFMutableArrayRef candidates = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
     bool ok = candidates && IORegistryEntryGetChildIterator(driver, kIOServicePlane, &children) == KERN_SUCCESS;
@@ -58,9 +60,86 @@ static void direct_media(io_registry_entry_t driver, CFMutableDictionaryRef row,
         }
         IOObjectRelease(child);
     }
-    if (children) IOObjectRelease(children);
+    if (children) { if (!IOIteratorIsValid(children)) ok = false; IOObjectRelease(children); }
     CFDictionarySetValue(row, CFSTR("media_mapping_state"), ok ? CFSTR("ok") : CFSTR("unavailable"));
     if (candidates) { CFDictionarySetValue(row, CFSTR("whole_media_candidates"), candidates); CFRelease(candidates); }
+    return ok;
+}
+
+/* Read only the selected USB device's own bounded properties. Never search a
+ * parent recursively for a serial/speed: that could identify a hub instead. */
+static void usb_number(io_registry_entry_t device, CFStringRef key,
+                       CFMutableDictionaryRef row, CFStringRef output, uint64_t maximum) {
+    CFTypeRef value = IORegistryEntryCreateCFProperty(device, key, NULL, 0);
+    if (value && CFGetTypeID(value) == CFNumberGetTypeID() && !CFNumberIsFloatType(value)) {
+        int64_t number;
+        if (CFNumberGetValue(value, kCFNumberSInt64Type, &number) && number >= 0 && (uint64_t)number <= maximum)
+            put_uint(row, output, (uint64_t)number);
+    }
+    if (value) CFRelease(value);
+}
+
+/* A complete non-USB ancestry is different from a failed or bounded lookup.
+ * Handles and raw serials remain worker-local; only a bounded private plist
+ * reaches the Rust parser, which emits a node-scoped opaque identity. */
+static bool usb_ancestor(io_registry_entry_t driver, CFMutableDictionaryRef row, unsigned *visits) {
+    CFMutableDictionaryRef usb = CFDictionaryCreateMutable(NULL, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (!usb) return false;
+    CFDictionarySetValue(usb, CFSTR("state"), CFSTR("unavailable"));
+    io_registry_entry_t current = driver;
+    IOObjectRetain(current);
+    uint64_t seen[USB_ANCESTOR_DEPTH];
+    unsigned seen_count = 0;
+    bool complete = false;
+    for (unsigned depth = 0; depth < USB_ANCESTOR_DEPTH; ++depth) {
+        if (++*visits > RECORD_LIMIT) break;
+        uint64_t registry;
+        if (IORegistryEntryGetRegistryEntryID(current, &registry) != KERN_SUCCESS) break;
+        bool repeated = false;
+        for (unsigned i = 0; i < seen_count; ++i) if (seen[i] == registry) repeated = true;
+        if (repeated) break;
+        seen[seen_count++] = registry;
+        if (IOObjectConformsTo(current, kIOUSBHostDeviceClassName)) {
+            if (!IORegistryEntryInPlane(current, kIOServicePlane)) break;
+            CFDictionarySetValue(usb, CFSTR("state"), CFSTR("usb"));
+            put_uint(usb, CFSTR("registry_id"), registry);
+            usb_number(current, CFSTR(kUSBHostMatchingPropertySpeed), usb, CFSTR("speed_id"), UINT32_MAX);
+            usb_number(current, CFSTR(kUSBHostMatchingPropertyVendorID), usb, CFSTR("vendor_id"), UINT16_MAX);
+            usb_number(current, CFSTR(kUSBHostMatchingPropertyProductID), usb, CFSTR("product_id"), UINT16_MAX);
+            CFTypeRef serial = IORegistryEntryCreateCFProperty(current, CFSTR(kUSBHostDevicePropertySerialNumberString), NULL, 0);
+            if (serial && CFGetTypeID(serial) == CFStringGetTypeID() &&
+                CFStringGetLength(serial) > 0 && CFStringGetLength(serial) <= 256)
+                CFDictionarySetValue(usb, CFSTR("serial"), serial);
+            if (serial) CFRelease(serial);
+            complete = IORegistryEntryInPlane(current, kIOServicePlane) && IORegistryEntryInPlane(driver, kIOServicePlane);
+            if (!complete) CFDictionarySetValue(usb, CFSTR("state"), CFSTR("unavailable"));
+            break;
+        }
+        /* Legacy USB uses different speed numbering and is not silently treated
+         * as non-USB when that older ancestry is encountered. */
+        if (IOObjectConformsTo(current, "IOUSBDevice")) break;
+        io_iterator_t parents = IO_OBJECT_NULL;
+        if (IORegistryEntryGetParentIterator(current, kIOServicePlane, &parents) != KERN_SUCCESS) break;
+        io_registry_entry_t parent = IOIteratorNext(parents);
+        io_registry_entry_t other = IOIteratorNext(parents);
+        bool valid = IOIteratorIsValid(parents);
+        IOObjectRelease(parents);
+        if (other) IOObjectRelease(other);
+        if (!valid || other) { if (parent) IOObjectRelease(parent); break; }
+        if (!parent) {
+            CFDictionarySetValue(usb, CFSTR("state"), CFSTR("not_usb"));
+            complete = IORegistryEntryInPlane(driver, kIOServicePlane);
+            if (!complete) CFDictionarySetValue(usb, CFSTR("state"), CFSTR("unavailable"));
+            break;
+        }
+        IOObjectRelease(current);
+        current = parent;
+    }
+    IOObjectRelease(current);
+    CFDictionarySetValue(row, CFSTR("usb"), usb);
+    CFRelease(usb);
+    return complete;
 }
 
 static int export_plist(CFPropertyListRef value, unsigned char **out, size_t *length) {
@@ -146,6 +225,8 @@ int storage_iokit(unsigned char **out, size_t *length) {
     io_object_t entry;
     int error = 0;
     unsigned media_records = 0;
+    unsigned ancestor_visits = 0;
+    bool usb_complete = true;
     while ((entry = IOIteratorNext(iterator)) != IO_OBJECT_NULL) {
         if (CFArrayGetCount(rows) >= RECORD_LIMIT) { IOObjectRelease(entry); error = EOVERFLOW; break; }
         uint64_t registry_id;
@@ -155,7 +236,8 @@ int storage_iokit(unsigned char **out, size_t *length) {
         CFMutableDictionaryRef row = CFDictionaryCreateMutable(NULL, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         put_uint(row, CFSTR("registry_id"), registry_id);
-        direct_media(entry, row, &media_records);
+        if (!direct_media(entry, row, &media_records)) usb_complete = false;
+        if (!usb_ancestor(entry, row, &ancestor_visits)) usb_complete = false;
         CFTypeRef stats = IORegistryEntryCreateCFProperty(entry, CFSTR(kIOBlockStorageDriverStatisticsKey), NULL, 0);
         CFMutableDictionaryRef normalized = CFDictionaryCreateMutable(NULL, 0,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -181,22 +263,19 @@ int storage_iokit(unsigned char **out, size_t *length) {
         if (stats) CFRelease(stats);
         IOObjectRelease(entry);
     }
+    if (!IOIteratorIsValid(iterator)) error = EAGAIN;
     IOObjectRelease(iterator);
     if (!error) {
-        CFErrorRef cferror = NULL;
-        CFDataRef data = CFPropertyListCreateData(NULL, rows, kCFPropertyListBinaryFormat_v1_0, 0, &cferror);
-        if (!data) error = EIO;
+        CFMutableDictionaryRef envelope = CFDictionaryCreateMutable(NULL, 0,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if (!envelope) error = ENOMEM;
         else {
-            CFIndex size = CFDataGetLength(data);
-            if (size < 0 || (uint64_t)size > OUTPUT_LIMIT) error = EOVERFLOW;
-            else {
-                *out = malloc((size_t)size);
-                if (!*out) error = ENOMEM;
-                else { memcpy(*out, CFDataGetBytePtr(data), (size_t)size); *length = (size_t)size; }
-            }
-            CFRelease(data);
+            put_uint(envelope, CFSTR("version"), 2);
+            CFDictionarySetValue(envelope, CFSTR("usb_complete"), usb_complete ? kCFBooleanTrue : kCFBooleanFalse);
+            CFDictionarySetValue(envelope, CFSTR("drivers"), rows);
+            error = export_plist(envelope, out, length);
+            CFRelease(envelope);
         }
-        if (cferror) CFRelease(cferror);
     }
     CFRelease(rows);
     return error;

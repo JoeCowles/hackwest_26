@@ -1,4 +1,5 @@
 use super::*;
+use crate::device_snapshot::{DeviceSnapshot, MAX_DEVICES, UsbDevice};
 use serde_json::json;
 
 fn disk_id(node: &str, boot: &str, bsd: &str) -> String {
@@ -231,8 +232,20 @@ pub fn parse_snapshots(bytes: &[u8], resource_id: &str) -> Result<Collected> {
 
 pub fn parse_iokit(bytes: &[u8], node: &str, boot: &str) -> Result<Collected> {
     let value = plist(bytes)?;
-    let rows = value.as_array().context("IOKit output must be an array")?;
+    let (rows, mut usb_complete) = if let Some(rows) = value.as_array() {
+        (rows, None)
+    } else {
+        ensure!(
+            value.get("version").and_then(|v| uint(v).ok()) == Some(2),
+            "unsupported IOKit envelope"
+        );
+        (
+            array(&value, "drivers")?,
+            Some(value.get("usb_complete").and_then(Value::as_bool) == Some(true)),
+        )
+    };
     let mut result = Collected::complete();
+    let mut usb_devices = Vec::new();
     for row in rows {
         let registry = uint(
             row.get("registry_id")
@@ -267,6 +280,16 @@ pub fn parse_iokit(bytes: &[u8], node: &str, boot: &str) -> Result<Collected> {
         if let Ok(candidates) = mapping {
             fields.insert("whole_media_candidates".into(), candidates);
             fields.insert("media_mapping_state".into(), "ok".into());
+        }
+        if let Some(complete) = &mut usb_complete {
+            if fields["media_mapping_state"] != "ok" {
+                *complete = false;
+            }
+            match usb_device(row, &fields, node, boot, &id, registry) {
+                Ok(Some(device)) => usb_devices.push(device),
+                Ok(None) => {}
+                Err(_) => *complete = false,
+            }
         }
         result.resource(Resource::new(id.clone(), "controller", fields))?;
         let stats = row
@@ -306,6 +329,174 @@ pub fn parse_iokit(bytes: &[u8], node: &str, boot: &str) -> Result<Collected> {
             "IOBlockStorageDriver-statistics-v1",
         );
     }
+    if let Some(mut complete) = usb_complete {
+        let mut counts = std::collections::BTreeMap::new();
+        for device in &usb_devices {
+            *counts.entry(device.identity.clone()).or_insert(0) += 1;
+        }
+        usb_devices.retain(|device| {
+            let unique = counts[&device.identity] == 1;
+            complete &= unique;
+            unique
+        });
+        usb_devices.sort_by(|a, b| a.driver_resource_id.cmp(&b.driver_resource_id));
+        if usb_devices.len() > MAX_DEVICES {
+            complete = false;
+            usb_devices.truncate(MAX_DEVICES);
+        }
+        let mut snapshot = DeviceSnapshot {
+            version: 1,
+            complete,
+            devices: usb_devices,
+        };
+        // Optional USB coverage must never reject independently usable counters.
+        if snapshot.validate().is_err() {
+            snapshot.complete = false;
+            snapshot.devices.clear();
+        }
+        result.sample(
+            &format!("{node}/host"),
+            "iokit.block",
+            vec![],
+            "ok",
+            "IOBlockStorageDriver-statistics-v2",
+        );
+        result
+            .samples
+            .last_mut()
+            .expect("host acquisition")
+            .extensions = Some(crate::model::attrs(json!({
+            "usb_device_snapshot": snapshot
+        })));
+    }
     validate_samples(&result)?;
     Ok(result)
+}
+
+fn usb_device(
+    row: &Value,
+    media: &Attributes,
+    node: &str,
+    boot: &str,
+    driver: &str,
+    registry: u128,
+) -> Result<Option<UsbDevice>> {
+    let usb = row
+        .get("usb")
+        .filter(|v| v.is_object())
+        .context("USB ancestry unavailable")?;
+    match usb.get("state").and_then(Value::as_str) {
+        Some("not_usb") => return Ok(None),
+        Some("usb") => {}
+        _ => anyhow::bail!("USB ancestry incomplete"),
+    }
+    ensure!(
+        usb.get("registry_id")
+            .and_then(|v| uint(v).ok())
+            .is_some_and(|n| n > 0 && n <= u64::MAX as u128),
+        "USB registry identity unavailable"
+    );
+    let serial = usb.get("serial").and_then(Value::as_str).filter(|s| {
+        !s.trim().is_empty()
+            && s.len() <= 1024
+            && s.encode_utf16().count() <= 256
+            && !s.chars().any(char::is_control)
+            && !s.trim().bytes().all(|c| c == b'0')
+    });
+    let vid = usb
+        .get("vendor_id")
+        .and_then(|v| uint(v).ok())
+        .filter(|n| *n <= u16::MAX as u128);
+    let pid = usb
+        .get("product_id")
+        .and_then(|v| uint(v).ok())
+        .filter(|n| *n <= u16::MAX as u128);
+    let (identity, identity_basis, identity_scope) =
+        if let (Some(serial), Some(vid), Some(pid)) = (serial, vid, pid) {
+            // Private acquisition bytes never enter resources, metrics or diagnostics.
+            let key = serde_json::to_string(&(vid, pid, serial))?;
+            (
+                scoped_id(node, "", "usb-enclosure-serial-v1", &key),
+                "reported_usb_serial",
+                "usb_enclosure",
+            )
+        } else {
+            (
+                scoped_id(
+                    node,
+                    boot,
+                    "usb-driver-incarnation-v1",
+                    &registry.to_string(),
+                ),
+                "boot_registry",
+                "driver_incarnation",
+            )
+        };
+    let speed = usb
+        .get("speed_id")
+        .and_then(|v| uint(v).ok())
+        .filter(|n| *n <= u64::MAX as u128);
+    // IOUSBHostFamilyDefinitions.h: USBSpeed uses tIOUSBHostConnectionSpeed,
+    // whose numbering is different from the legacy USBDeviceSpeed enum.
+    let bps = match speed {
+        Some(1) => Some(12_000_000u64),
+        Some(2) => Some(1_500_000),
+        Some(3) => Some(480_000_000),
+        Some(4) => Some(5_000_000_000),
+        Some(5) => Some(10_000_000_000),
+        Some(6) => Some(20_000_000_000),
+        _ => None,
+    };
+    let speed_state = if bps.is_some() {
+        "available"
+    } else if speed.is_some_and(|s| s > 6) {
+        "unsupported"
+    } else {
+        "unknown"
+    };
+    let bsd_name = if media["media_mapping_state"] == "ok" {
+        let candidates: Vec<_> = media
+            .get("whole_media_candidates")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|c| c["whole"] == true)
+            .collect();
+        if candidates.len() == 1 {
+            candidates[0]
+                .get("bsd_name")
+                .and_then(Value::as_str)
+                .filter(|name| crate::device_snapshot::valid_whole_disk(name))
+                .map(str::to_owned)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let device = UsbDevice {
+        identity,
+        identity_basis: identity_basis.into(),
+        identity_scope: identity_scope.into(),
+        driver_resource_id: driver.into(),
+        bsd_name,
+        negotiated_bps: bps.map(|n| n.to_string()),
+        speed_state: speed_state.into(),
+        reason: if bps.is_none() {
+            Some(
+                if speed_state == "unsupported" {
+                    "speed_code_unsupported"
+                } else {
+                    "speed_unavailable"
+                }
+                .into(),
+            )
+        } else if identity_basis == "boot_registry" {
+            Some("stable_identity_unavailable".into())
+        } else {
+            None
+        },
+    };
+    device.validate()?;
+    Ok(Some(device))
 }

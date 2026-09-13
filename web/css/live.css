@@ -70,6 +70,12 @@
 .rack-panel { min-width: 0; }
 @media(max-width:600px) { .storage-children { margin-left: 6px; padding-left: 8px; } .storage-entry-title { gap: 4px 8px; } }
 .storage-capacity dd { font-weight: 500; margin-bottom: 4px; }
+.device-watch { margin: 20px 0; padding: 16px; border: 1px solid var(--orchard-border); background: rgba(89,128,166,.035); }
+.device-watch header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.device-watch h4 { margin: 0; font: 600 22px 'Barlow Condensed',sans-serif; }
+.device-watch .inventory-properties { grid-template-columns: repeat(auto-fit,minmax(min(220px,100%),1fr)); }
+.device-watch dd { font-weight: 500; }
+.device-watch p { font-size: 12px; line-height: 1.6; }
 
 /* Detection evidence is dense, so keep lifecycle facts readable without
    flattening them into a single health verdict. */
