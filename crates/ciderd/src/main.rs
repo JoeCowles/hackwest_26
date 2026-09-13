@@ -40,7 +40,7 @@ enum Mode {
         #[arg(long)]
         node_id: Option<String>,
     },
-    /// Collect a bounded offline snapshot; no credentials or network delivery.
+    /// Enroll with Orchard and securely store the matching node identity and credential.
     EnrollServer {
         #[arg(long)]
         config: PathBuf,
